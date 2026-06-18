@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>KefBar</string>
+    <key>CFBundleDisplayName</key>
+    <string>KefBar</string>
+    <key>CFBundleIdentifier</key>
+    <string>io.github.alexjuillardoff.kefbar</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleExecutable</key>
+    <string>KefBar</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>13.0</string>
+    <!-- App accessoire : pas d'icône dans le Dock, vit dans la barre de menus. -->
+    <key>LSUIElement</key>
+    <true/>
+    <!-- Autorise le HTTP en clair vers les IP du réseau local (l'API KEF est en http://). -->
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsLocalNetworking</key>
+        <true/>
+    </dict>
+    <!-- macOS Sonoma+ : déclaration d'accès au réseau local. -->
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>KefBar communique avec vos enceintes KEF sur le réseau local.</string>
+</dict>
+</plist>

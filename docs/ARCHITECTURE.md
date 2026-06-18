@@ -1,0 +1,260 @@
+# Architecture de KefBar — détaillée
+
+Comment l'app est structurée et fonctionne, du réseau jusqu'à l'UI. Signatures exactes,
+modèle de concurrence, séquencement, pièges, et points d'extension.
+
+---
+
+## 1. Vue d'ensemble & dépendances
+
+Quatre couches + un module transverse :
+
+```
+┌─────────────────────────────────────────────┐
+│  KefBarApp        scène MenuBarExtra, entrée  │  @main
+├─────────────────────────────────────────────┤
+│  ContentView      UI SwiftUI (le menu)        │  lit AppState, déclenche ses méthodes
+├─────────────────────────────────────────────┤
+│  AppState         état observable + actions   │  @MainActor, ObservableObject
+├─────────────────────────────────────────────┤
+│  KefClient        protocole HTTP/JSON KEF      │  struct sans état, async/await
+└─────────────────────────────────────────────┘
+        Models  (Source, NowPlaying, KefError)  ← utilisé par toutes les couches
+```
+
+Graphe de dépendances (qui connaît qui) :
+
+```
+KefBarApp ──▶ ContentView ──▶ AppState ──▶ KefClient ──▶ URLSession
+                  │                │            │
+                  └────────────────┴────────────┴──▶ Models
+```
+
+Règle : **les dépendances ne pointent que vers le bas**. `KefClient` ignore l'existence de
+`AppState` et de l'UI ; `AppState` ignore SwiftUI (il n'importe `SwiftUI` que pour
+`ObservableObject`/`@Published`).
+
+## 2. Fichiers & responsabilités
+
+| Fichier | Responsabilité |
+|---|---|
+| [`KefClient.swift`](../Sources/KefBar/KefClient.swift) | Couche réseau pure. `getData`/`setData` bas niveau + méthodes haut niveau. Aucune dépendance UI. |
+| [`AppState.swift`](../Sources/KefBar/AppState.swift) | `@MainActor ObservableObject` : état `@Published`, orchestration async, polling, debounce, persistance IP. |
+| [`Models.swift`](../Sources/KefBar/Models.swift) | `Source` (enum + libellés FR + SF Symbols), `NowPlaying`, `KefError`. |
+| [`ContentView.swift`](../Sources/KefBar/ContentView.swift) | UI déclarative : en-tête/statut, réglages IP, now-playing, transport, slider, picker, footer. |
+| [`KefBarApp.swift`](../Sources/KefBar/KefBarApp.swift) | `@main`, `MenuBarExtra(.window)`, `AppDelegate → setActivationPolicy(.accessory)`. |
+
+## 3. Surface d'API
+
+### `KefClient` (struct)
+
+| Méthode | Signature | Endpoint (voir [PROTOCOL.md](PROTOCOL.md)) |
+|---|---|---|
+| Lecture bas niveau | `getData(path:roles:) async throws -> [String: Any]` | `GET /api/getData` → premier objet du tableau |
+| Écriture bas niveau | `setData(path:value:roles:) async throws` | `POST /api/setData` |
+| Validation HTTP | `static validate(_:) throws` | rejette hors 2xx |
+| Parsing entier tolérant | `static int(_:) -> Int?` | `NSNumber` **ou** `String` |
+| Volume (lire) | `volume() async throws -> Int` | `player:volume` |
+| Volume (écrire) | `setVolume(_:) async throws` | `player:volume` (clamp 0–100) |
+| Power (lire) | `isPoweredOn() async throws -> Bool` | `settings:/kef/host/speakerStatus` |
+| Source (lire) | `currentSource() async throws -> Source` | `settings:/kef/play/physicalSource` |
+| Source (écrire) | `setSource(_:) async throws` | idem |
+| Éteindre | `powerOff() async throws` | `setSource(.standby)` |
+| Allumer | `powerOn(_ source: Source = .wifi) async throws` | `setSource(source)` |
+| Transport | `playPause()`, `next()`, `previous()` `async throws` | `player:player/control` (`roles=activate`) |
+| Now-playing | `nowPlaying() async throws -> NowPlaying?` | `player:player/data` |
+| Nom appareil | `deviceName() async throws -> String?` | `settings:/deviceName` |
+
+### `AppState` (@MainActor ObservableObject)
+
+État publié :
+
+| Propriété | Type | Accès |
+|---|---|---|
+| `host` | `String` | lecture/écriture (didSet → persiste + reconstruit le client + refresh) |
+| `isReachable` | `Bool` | `private(set)` |
+| `isOn` | `Bool` | `private(set)` |
+| `volume` | `Int` | lecture/écriture |
+| `source` | `Source` | `private(set)` |
+| `nowPlaying` | `NowPlaying?` | `private(set)` |
+| `deviceName` | `String?` | `private(set)` |
+| `lastError` | `String?` | `private(set)` |
+| `isMuted` | `Bool` | calculé : `volume == 0` |
+
+État privé : `client: KefClient?`, `lastSource: Source`, `previousVolume: Int = 20`,
+`pollTask`, `volumeSendTask`. Clé de persistance : `"kef.host"` (UserDefaults).
+
+Actions : `refresh()`, `startPolling(every:)`, `stopPolling()`, `setVolume(_:)`,
+`toggleMute()`, `togglePower()`, `select(_:)`, `playPause()`, `next()`, `previous()`.
+
+## 4. Modèle de concurrence
+
+| Élément | Choix | Conséquence |
+|---|---|---|
+| `AppState` | `@MainActor` | toutes les mutations `@Published` sont sur le main thread, sans `DispatchQueue.main`. |
+| `KefClient` | `struct` (value type, `Sendable`) | capturable sans risque dans une `Task`, reconstruit quand l'IP change. |
+| Appels réseau | `async/await` via `URLSession` | non bloquants ; chaque méthode `KefClient` est `async throws`. |
+| Actions UI | `Task { … }` lancées depuis `@MainActor` | reviennent automatiquement sur le main actor en fin de `await`. |
+| Build | tools-version **5.9** (mode langage Swift 5) | concurrence stricte Swift 6 désactivée → pas d'erreurs de `Sendable` parasites. |
+
+## 5. Flux de données
+
+### 5.1 Rafraîchissement (lecture)
+
+`refresh()` enchaîne **5 lectures séquentielles** :
+
+```
+refresh()
+ ├─▶ isPoweredOn()    GET speakerStatus      (try   — échec ⇒ catch global)
+ ├─▶ volume()         GET player:volume      (try)
+ ├─▶ currentSource()  GET physicalSource     (try)
+ ├─▶ nowPlaying()     GET player:player/data (try? — optionnel, n'invalide rien)
+ └─▶ deviceName()     GET settings:/deviceName (try? — optionnel)
+        ▼
+   met à jour les @Published ⇒ SwiftUI redessine
+```
+
+Règles de mise à jour notables :
+- `if vol > 0 { previousVolume = vol }` — mémorise le dernier volume non nul (pour l'unmute).
+- `if src != .standby { source = src; lastSource = src }` — en veille, on **ne** remplace
+  **pas** la source affichée par `standby` (on garde la dernière source réelle).
+- `nowPlaying`/`deviceName` en `try?` : leur échec n'éteint pas l'indicateur « joignable ».
+
+> **Compromis assumé** : les 5 GET sont **séquentiels** (simple, lisible). On pourrait les
+> paralléliser avec `async let` pour diviser la latence — voir §9.
+
+### 5.2 Écriture (action utilisateur)
+
+```
+Slider/Bouton ─▶ AppState.<action>()
+                   ├─ met à jour l'état local immédiatement (UI réactive)
+                   └─ Task { try await client.<call>() ; await refresh() }
+```
+
+## 6. Mécanismes précis
+
+### Anti-rebond du volume (150 ms)
+
+`setVolume(_:)` :
+1. clamp 0–100 ; si > 0, met à jour `previousVolume` ;
+2. écrit `volume` **immédiatement** (l'UI suit le doigt sans latence réseau) ;
+3. **annule** la `volumeSendTask` précédente, en programme une nouvelle qui `sleep(150 ms)`
+   puis envoie `client.setVolume`.
+
+Effet : un drag qui émet 40 valeurs/s ne déclenche **qu'une** requête HTTP, ~150 ms après
+l'arrêt du geste.
+
+```
+drag: 12 13 15 18 22 25 (relâché)
+                          └─ 150 ms ─▶ une seule requête setVolume(25)
+```
+
+### Mute / unmute
+
+`isMuted` est calculé (`volume == 0`). `toggleMute()` :
+`setVolume(isMuted ? max(previousVolume, 10) : 0)`. C'est le **soft-mute** (volume 0 +
+restauration), indépendant du firmware (cf. [PROTOCOL A.6](PROTOCOL.md#a6-mute--deux-méthodes)).
+
+### Machine d'état power / source
+
+```
+        select(s)               togglePower (isOn)
+   ┌────────────────┐        ┌──────────────────────┐
+   ▼                │        ▼                      │
+[Allumé/source]  setSource(s)            powerOff() → standby
+   │  ▲                                              │
+   │  └────────── powerOn(lastSource) ───────────────┘
+   ▼            togglePower (!isOn)
+[Veille]
+```
+
+- `select(s)` : met `isOn = true`, mémorise `lastSource = s`, écrit la source.
+- `togglePower()` : si allumé → `powerOff()` ; sinon → `powerOn(lastSource)` puis `source = lastSource`.
+- Toute action se termine par `await refresh()` pour resynchroniser l'état réel.
+
+### Cycle de vie du polling
+
+`ContentView` : `.task { await state.refresh(); state.startPolling() }` à l'ouverture du menu,
+`.onDisappear { state.stopPolling() }` à la fermeture. `startPolling(every: 3)` boucle
+`sleep(3 s)` + `refresh()` dans une `Task` annulable ; `stopPolling()` l'annule.
+
+> Conséquence : l'état n'est rafraîchi **que menu ouvert**. Pour que l'icône reflète l'état
+> menu fermé, il faudrait un polling permanent (léger) — voir §9.
+
+### Gestion d'erreur
+
+`report(_:)` mappe l'erreur vers `lastError` (`LocalizedError.errorDescription` si dispo).
+`KefError` ([Models.swift](../Sources/KefBar/Models.swift)) couvre `noHost`, `badStatus(Int)`,
+`unexpectedResponse`. En cas d'échec de `refresh()`, `isReachable = false` et le message
+s'affiche en rouge dans le menu.
+
+### Persistance
+
+Seule l'**IP** est persistée (`UserDefaults`, clé `kef.host`), via le `didSet` de `host`.
+Aucune autre donnée n'est stockée.
+
+## 7. Entrée & barre de menus
+
+```swift
+MenuBarExtra { ContentView().environmentObject(state) }
+label: { Image(systemName: state.isOn ? "hifispeaker.fill" : "hifispeaker") }
+.menuBarExtraStyle(.window)
+```
+
+- `.window` : indispensable pour héberger le **slider** (le style `.menu` ne gère que des items).
+- `AppDelegate.applicationDidFinishLaunching` → `NSApp.setActivationPolicy(.accessory)` : masque
+  le Dock **même hors bundle** (`swift run`).
+
+## 8. Bundle `.app`, ATS & signature (pièges)
+
+L'API KEF est en **HTTP clair** → **App Transport Security** la bloque par défaut. Parade :
+`NSAllowsLocalNetworking` dans [`Resources/Info.plist`](../Resources/Info.plist), **appliqué
+uniquement dans un vrai bundle `.app`**.
+
+[`Scripts/build-app.sh`](../Scripts/build-app.sh) :
+```
+swift build -c release
+└─ assemble KefBar.app/Contents/{MacOS/KefBar, Info.plist}
+└─ codesign --force --sign -   (signature ad-hoc → pas d'alerte Gatekeeper en local)
+```
+
+L'`Info.plist` porte aussi `LSUIElement = true` (pas de Dock) et
+`NSLocalNetworkUsageDescription` (autorisation réseau local, macOS Sonoma+).
+
+**Bug shell rencontré & corrigé** : `echo "… $APP…"` collait le caractère unicode `…` au nom
+de variable (`unbound variable` sous `set -u`). Corrigé en bordant les variables : `${APP}`.
+
+## 9. Limites et points à valider
+
+L'app **compile et se package** mais n'a **pas été testée sur enceinte physique**. À vérifier :
+
+1. **Now-playing** (`player:player/data`) : structure variable selon le service ; le parsing de
+   `KefClient.nowPlaying()` peut nécessiter un ajustement de clés.
+2. **Allumage** : KefBar écrit une source réelle (`wifi`) ; à confirmer selon modèle/firmware
+   (variante `powerOn` possible — cf. [PROTOCOL A.4](PROTOCOL.md#a4-alimentation-et-source--un-seul-chemin)).
+3. **HTTP/ATS** : si échec en `swift run`, passer par le bundle `.app`.
+
+Détail complet et confiance par point : [VERIFICATION.md](VERIFICATION.md#3-ce-qui-na-pas-été-testé--à-valider-sur-matériel).
+
+## 10. Pistes d'évolution (avec point d'entrée)
+
+| Évolution | Où / comment |
+|---|---|
+| **Lectures parallèles** | Dans `refresh()`, remplacer les 5 `await` séquentiels par `async let` + `await` groupé. |
+| **Push temps réel** | Remplacer le polling par `modifyQueue`/`pollQueue` ([PROTOCOL A.8](PROTOCOL.md#a8-push-temps-réel-long-poll--non-implémenté-dans-kefbar)) ; nouvelle méthode `KefClient.poll(...)`. |
+| **Multi-enceintes** | Généraliser `AppState` (IP unique) en liste + enceinte par défaut (cf. Kefir). |
+| **Découverte auto** | `NWBrowser` sur `_airplay._tcp` / `_googlecast._tcp` pour lister les enceintes. |
+| **Raccourcis clavier globaux** | volume/lecture sans ouvrir le menu. |
+| **DSP/EQ** | exposer les réglages avancés sur les modèles compatibles. |
+| **Polling permanent léger** | démarrer un poll lent au lancement pour que l'icône reflète l'état menu fermé. |
+
+## 11. Construire et lancer
+
+```bash
+cd ~/KefBar
+swift build                # compilation debug (vérif rapide)
+./Scripts/build-app.sh     # bundle .app signé
+open ./KefBar.app
+# développement :
+open Package.swift         # Xcode, ⌘R
+```

@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:KefBar}",
+            "name": "Debug KefBar",
+            "target": "KefBar",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug KefBar"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:KefBar}",
+            "name": "Release KefBar",
+            "target": "KefBar",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release KefBar"
+        }
+    ]
+}
