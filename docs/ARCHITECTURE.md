@@ -46,8 +46,8 @@ des callbacks (touches → actions).
 | [`Discovery.swift`](../Sources/KefBar/Discovery.swift) | Scan actif du sous-réseau local (`getifaddrs` + sondes `KefClient.identify()` concurrentes) pour découvrir les enceintes KEF. Pur, sans dépendance UI. |
 | [`AppState.swift`](../Sources/KefBar/AppState.swift) | `@MainActor ObservableObject` : état `@Published`, orchestration async, polling, debounce, **liste d'enceintes** + scan, persistance (IP active + enceintes). Détient le `NowPlayingCenter`. |
 | [`NowPlayingCenter.swift`](../Sources/KefBar/NowPlayingCenter.swift) | `@MainActor`. Pont vers **MediaPlayer** : reçoit les **touches média** physiques (`MPRemoteCommandCenter`) et publie la lecture en cours (`MPNowPlayingInfoCenter`) — ce qui fait de l'app l'application « En cours de lecture » du système, condition pour recevoir ces touches. Aucune dépendance UI/réseau. |
-| [`Models.swift`](../Sources/KefBar/Models.swift) | `Source` (enum + libellés FR + SF Symbols), `Speaker` (enceinte connue, identité par MAC), `NowPlaying`, `KefError`. |
-| [`ContentView.swift`](../Sources/KefBar/ContentView.swift) | UI déclarative : en-tête/statut, réglages IP, now-playing, transport, slider, picker, footer. |
+| [`Models.swift`](../Sources/KefBar/Models.swift) | `Source` (enum + libellés FR + SF Symbols), `Speaker` (enceinte connue, identité par MAC), `PlayMode` (cycle répétition/aléatoire), `QueueItem`, `NowPlaying`, `KefError`. |
+| [`ContentView.swift`](../Sources/KefBar/ContentView.swift) | UI déclarative : en-tête/statut, réglages IP + lancement au démarrage, now-playing, transport (+ mode de lecture), slider (+ −/+), picker, **réglages avancés** (DSP, minuterie de veille, file d'attente), footer. |
 | [`KefBarApp.swift`](../Sources/KefBar/KefBarApp.swift) | `@main`, `MenuBarExtra(.window)`, `AppDelegate → setActivationPolicy(.accessory)`. |
 
 ## 3. Surface d'API
@@ -71,8 +71,19 @@ des callbacks (touches → actions).
 | Now-playing | `nowPlaying() async throws -> NowPlaying?` | `player:player/data` (titre/artiste/album/pochette + **durée** best-effort) |
 | Position | `playPosition() async throws -> Int` | `player:player/data/playTime` (`i64_`, ms) |
 | Nom appareil | `deviceName() async throws -> String?` | `settings:/deviceName` |
+| Volume max / pas | `maximumVolume()` / `volumeStep() async throws -> Int?` | `settings:/kef/host/maximumVolume` · `…/volumeStep` (`i16_`) |
+| Mode lecture (lire/écrire) | `playMode()` / `setPlayMode(_:) async throws` | `settings:/mediaPlayer/playMode` (type `playerPlayMode` ; écriture refusée hors lecture) |
+| DSP (**lecture seule**) | `eqProfile() async throws -> [String: Any]?` | `kef:eqProfile/v2` — écriture 401 ([PROTOCOL A.12](PROTOCOL.md#a12-dsp--profil-eq--kefeqprofilev2-lecture-seule)) |
+| File d'attente | `playQueue() async throws -> [QueueItem]` | `playlists:pq/getitems` (`roles=rows`, vide = `[null]`) |
+| Notifications | `notifications() async throws -> [String]` | `notifications:/display/queue` (`roles=rows`) |
 | Évènements (s'abonner) | `subscribeToEvents() async throws -> String` | `POST /api/event/modifyQueue` → UUID de file |
 | Évènements (attendre) | `pollEvents(queueId:timeout:) async throws -> Bool` | `GET /api/event/pollQueue` (long-poll) |
+
+> Lecture **`rows`** : `getDataArray(path:roles:)` (privée) renvoie **tout** le tableau de
+> réponse (en ne gardant que les objets — une file vide vaut `[null]`), contrairement à
+> `getData` qui n'en prend que le premier objet. Helpers tolérants : `string(_:)` (chaîne
+> typée), `typedObject(_:)` (objet typé + son `type`), `anyInt(_:)` (entier quelle que soit la
+> largeur — `i16_`/`i32_`/`i64_`… ; nécessaire car `volumeStep` arrive en `i16_`).
 
 ### `AppState` (@MainActor ObservableObject)
 
@@ -91,14 +102,33 @@ des callbacks (touches → actions).
 | `deviceName` | `String?` | `private(set)` |
 | `lastError` | `String?` | `private(set)` |
 | `isMuted` | `Bool` | calculé : `volume == 0` |
+| `playMode` | `PlayMode` | `private(set)` — répétition / aléatoire |
+| `maxVolume` / `volumeStep` | `Int` | `private(set)` — plafond du slider · pas des boutons −/+ |
+| `eqAvailable`, `eqDeskMode`, `eqWallMode`, `eqPhaseCorrection`, `eqHighPassMode`, `eqSubwooferOut` | `Bool` | `private(set)` — miroirs DSP **lecture seule** |
+| `eqProfileName` | `String?` | `private(set)` — nom du profil DSP |
+| `eqBassExtension` / `eqTrebleAmount` | `String` / `Int` | `private(set)` — graves (`standard`/`less`/`extra`) · aigus |
+| `queue` | `[QueueItem]` | `private(set)` — best-effort |
+| `notifications` | `[String]` | `private(set)` — best-effort |
+| `sleepTimerEnd` | `Date?` | `private(set)` — heure d'extinction programmée |
+| `launchAtLogin` | `Bool` | lecture/écriture (didSet → `SMAppService`) |
 
 État privé : `client: KefClient?`, `lastSource: Source`, `previousVolume: Int = 20`,
-`eventTask`, `positionTask`, `volumeSendTask`, `coverURLShown`/`coverTask`. Clé de persistance :
-`"kef.host"` (UserDefaults).
+`eventTask`, `positionTask`, `volumeSendTask`, `coverURLShown`/`coverTask`, profil DSP brut
+(`eqType`/`eqValue`), caches par enceinte (`volumeConfigLoaded`/`eqLoaded`), `sleepTask`. Clés
+de persistance : `"kef.host"` + `"kef.speakers"` (UserDefaults). `launchAtLogin` n'est pas
+persisté dans UserDefaults : il **reflète** l'état réel du login item (`SMAppService.mainApp.status`).
 
 Actions : `refresh()`, `startEventStream()`, `stopEventStream()`, `startPositionTicker()`,
-`stopPositionTicker()`, `setVolume(_:)`, `toggleMute()`, `togglePower()`, `select(_:)`,
-`playPause()`, `next()`, `previous()`.
+`stopPositionTicker()`, `setVolume(_:)`, `stepVolume(up:)`, `toggleMute()`, `togglePower()`,
+`select(_:)`, `playPause()`, `next()`, `previous()`, `cyclePlayMode()`, `refreshEQ()` (lecture
+seule), `refreshQueue()`, `refreshNotifications()`, `startSleepTimer(minutes:)`,
+`cancelSleepTimer()`.
+
+> **Configuration peu changeante** (plafond de volume, pas, profil DSP) : lue **une seule fois
+> par enceinte** en fin de `refresh()` (`loadSpeakerConfigIfNeeded()`, drapeaux
+> `volumeConfigLoaded`/`eqLoaded` remis à zéro au changement d'`host` par `resetPerSpeakerState()`).
+> File d'attente et notifications : chargées **à la demande** (ouverture du panneau « Réglages
+> avancés »), pour ne pas alourdir le rafraîchissement.
 
 ### `NowPlayingCenter` (@MainActor, détenu par `AppState`)
 
@@ -124,7 +154,8 @@ Actions : `refresh()`, `startEventStream()`, `stopEventStream()`, `startPosition
 
 ### 5.1 Rafraîchissement (lecture)
 
-`refresh()` enchaîne **5 lectures séquentielles** :
+`refresh()` enchaîne des **lectures séquentielles** (les 3 premières font foi pour
+« joignable » ; les suivantes sont optionnelles en `try?`) :
 
 ```
 refresh()
@@ -132,9 +163,13 @@ refresh()
  ├─▶ volume()         GET player:volume      (try)
  ├─▶ currentSource()  GET physicalSource     (try)
  ├─▶ nowPlaying()     GET player:player/data (try? — optionnel, n'invalide rien)
- └─▶ deviceName()     GET settings:/deviceName (try? — optionnel)
+ ├─▶ deviceName()     GET settings:/deviceName (try? — optionnel)
+ ├─▶ playPosition()   GET player/data/playTime (try? — optionnel)
+ └─▶ playMode()       GET mediaPlayer/playMode (try? — optionnel)
         ▼
    met à jour les @Published ⇒ SwiftUI redessine
+        ▼
+   loadSpeakerConfigIfNeeded()  ⇒ 1ʳᵉ fois/enceinte : maxVolume, volumeStep, eqProfile
         ▼
    nowPlayingCenter.update(nowPlaying:isOn:) ⇒ Now Playing macOS + touches média
 ```
@@ -361,6 +396,20 @@ L'app **compile et se package** mais n'a **pas été testée sur enceinte physiq
 4. **Touches média** : le routage par macOS suppose que l'enceinte renvoie un now-playing
    exploitable (sources Wi-Fi/streaming). Sur une source sans métadonnées (TV, optique…), il
    n'y a pas de « piste » et KefBar relâche logiquement les touches. À confirmer sur matériel.
+5. **Mode de lecture** (`settings:/mediaPlayer/playMode`) ✅ lecture vérifiée (type
+   `playerPlayMode`). **Écriture refusée hors lecture (HTTP 401)** → bouton désactivé tant que
+   rien ne joue ; les libellés des modes ≠ `normal` restent à confirmer (cf.
+   [PROTOCOL A.11](PROTOCOL.md#a11-mode-de-lecture-file-dattente--notifications)).
+6. **DSP / `kef:eqProfile/v2`** ✅ lecture vérifiée (chemin/type/clés réels). **Écriture
+   impossible** par cette voie (HTTP 401, objet complet *ou* partiel ; feuilles inexistantes)
+   → KefBar **affiche** le DSP en **lecture seule**. Le mécanisme d'écriture de KEF Connect
+   reste à percer (cf. [PROTOCOL A.12](PROTOCOL.md#a12-dsp--profil-eq--kefeqprofilev2-lecture-seule)).
+7. **File d'attente / notifications** (`roles=rows`) ✅ chemins valides ; **vide = `[null]`**.
+   Parsing défensif (objets seulement), affichage masqué si rien d'exploitable. Le rendu d'une
+   file **non vide** reste à voir en lecture réelle.
+8. **Lancement au démarrage** : `SMAppService.mainApp` exige le **bundle `.app`** (un
+   `CFBundleIdentifier`) ; sans lui (`swift run`), l'enregistrement échoue proprement et
+   l'interrupteur se resynchronise sur l'état réel.
 
 Détail complet et confiance par point : [VERIFICATION.md](VERIFICATION.md#3-ce-qui-na-pas-été-testé--à-valider-sur-matériel).
 
@@ -374,8 +423,13 @@ Détail complet et confiance par point : [VERIFICATION.md](VERIFICATION.md#3-ce-
 | ~~**Multi-enceintes**~~ ✅ | Fait — `AppState.savedSpeakers: [Speaker]` + IP active, sélecteur dans l'en-tête. |
 | ~~**Découverte auto**~~ ✅ | Fait — [`Discovery.swift`](../Sources/KefBar/Discovery.swift) scanne le LAN via sondes HTTP (plus fiable que Bonjour : ne remonte **que** des KEF). |
 | ~~**Touches média (lecture)**~~ ✅ | Fait — [`NowPlayingCenter.swift`](../Sources/KefBar/NowPlayingCenter.swift) : play/pause, ⏮, ⏭ via le clavier (framework MediaPlayer, sans permission). |
+| ~~**Mode de lecture (repeat/shuffle)**~~ ✅ | Fait — `cyclePlayMode()` (`settings:/mediaPlayer/playMode`), bouton unique dans le transport ([PROTOCOL A.11](PROTOCOL.md#a11-mode-de-lecture-file-dattente--notifications)). |
+| ~~**Limite de volume**~~ ✅ | Fait — `maximumVolume()` borne le slider, `volumeStep()` cale les boutons −/+. |
+| **DSP/EQ** ✅ lecture / ❌ écriture | Fait en **lecture seule** — affichage du profil (`kef:eqProfile/v2`). L'écriture est refusée (HTTP 401) : reste à rétro-ingénierier le mécanisme de KEF Connect ([PROTOCOL A.12](PROTOCOL.md#a12-dsp--profil-eq--kefeqprofilev2-lecture-seule)). |
+| ~~**Minuterie de veille**~~ ✅ | Fait — `startSleepTimer(minutes:)` programme un `powerOff()` différé (côté app). |
+| ~~**File d'attente**~~ ✅ | Fait (best-effort) — `playQueue()` (`playlists:pq/getitems`, `rows`), liste dans les réglages avancés. |
+| ~~**Lancement au démarrage**~~ ✅ | Fait — interrupteur `launchAtLogin` via `SMAppService.mainApp` (bundle requis). |
 | **Raccourcis clavier — volume** | monter/baisser le volume au clavier sans ouvrir le menu (les touches volume restent gérées par le Mac, pas l'enceinte). |
-| **DSP/EQ** | exposer les réglages avancés sur les modèles compatibles. |
 | **Polling permanent léger** | démarrer un poll lent au lancement pour que l'icône reflète l'état menu fermé. |
 
 ## 11. Construire et lancer

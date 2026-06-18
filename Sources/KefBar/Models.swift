@@ -73,6 +73,64 @@ struct Speaker: Identifiable, Codable, Hashable {
     }
 }
 
+/// Mode de lecture (répétition / aléatoire) — chemin `settings:/mediaPlayer/playMode`.
+///
+/// ⚠️ Les chaînes exactes (`repeatAll`, `repeatOne`, `shuffle`…) sont **rétro-ingénieriées**
+/// et **non vérifiées sur matériel** : selon le firmware/service, l'API peut combiner
+/// répétition et aléatoire différemment. On modélise donc un **cycle** de modes mutuellement
+/// exclusifs (le plus robuste), et la lecture tolère une valeur inconnue (`.unknown`).
+enum PlayMode: String, CaseIterable, Hashable {
+    case normal
+    case repeatAll
+    case repeatOne
+    case shuffle
+
+    /// Valeur renvoyée/écrite par l'API (`string_`).
+    var apiValue: String { rawValue }
+
+    /// Tolérant : une chaîne non reconnue retombe sur `.normal`.
+    init(apiValue: String) { self = PlayMode(rawValue: apiValue) ?? .normal }
+
+    /// Mode suivant dans le cycle (bouton unique couvrant répétition et aléatoire).
+    var next: PlayMode {
+        switch self {
+        case .normal:    return .repeatAll
+        case .repeatAll: return .repeatOne
+        case .repeatOne: return .shuffle
+        case .shuffle:   return .normal
+        }
+    }
+
+    var displayName: String {
+        switch self {
+        case .normal:    return "Lecture normale"
+        case .repeatAll: return "Répéter tout"
+        case .repeatOne: return "Répéter la piste"
+        case .shuffle:   return "Aléatoire"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .normal:    return "arrow.forward.to.line"
+        case .repeatAll: return "repeat"
+        case .repeatOne: return "repeat.1"
+        case .shuffle:   return "shuffle"
+        }
+    }
+
+    /// `true` quand un mode non neutre est actif (pour mettre le bouton en évidence).
+    var isActive: Bool { self != .normal }
+}
+
+/// Un élément de la file d'attente (`playlists:pq/getitems`) ou une piste à venir.
+/// Best-effort : la structure des « rows » KEF est mal documentée (cf. PROTOCOL.md A.11).
+struct QueueItem: Identifiable, Hashable {
+    let id: Int
+    var title: String
+    var artist: String?
+}
+
 /// Métadonnées de lecture en cours (best-effort — la structure dépend du service source).
 struct NowPlaying: Equatable {
     var title: String?

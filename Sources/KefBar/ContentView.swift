@@ -3,6 +3,7 @@ import SwiftUI
 struct ContentView: View {
     @EnvironmentObject var state: AppState
     @State private var showSettings = false
+    @State private var showAdvanced = false
     @State private var manualIP = ""
 
     var body: some View {
@@ -16,10 +17,13 @@ struct ContentView: View {
             if !state.host.isEmpty {
                 Divider()
                 nowPlayingView
+                notificationsView
                 progressBar
                 transportControls
                 volumeControl
                 sourcePicker
+                Divider()
+                advancedSection
             }
 
             if let error = state.lastError, !state.isReachable {
@@ -38,10 +42,20 @@ struct ContentView: View {
             await state.refresh()
             state.startEventStream()
             state.startPositionTicker()
+            await state.refreshNotifications()
         }
         .onDisappear {
             state.stopEventStream()
             state.stopPositionTicker()
+        }
+        .onChange(of: showAdvanced) { open in
+            // Charge file d'attente + notifications (best-effort) à l'ouverture du panneau.
+            if open {
+                Task {
+                    await state.refreshQueue()
+                    await state.refreshNotifications()
+                }
+            }
         }
         .onChange(of: state.isScanning) { scanning in
             // À la fin d'un scan, retient s'il n'a rien trouvé de nouveau (pour le message d'aide).
@@ -113,6 +127,11 @@ struct ContentView: View {
                 Divider()
             }
             addSpeakerSection
+            Divider()
+            Toggle("Lancer au démarrage", isOn: $state.launchAtLogin)
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .font(.caption)
         }
     }
 
@@ -283,32 +302,49 @@ struct ContentView: View {
     }
 
     private var transportControls: some View {
-        HStack(spacing: 28) {
+        HStack(spacing: 0) {
             Spacer()
             Button { state.previous() } label: { Image(systemName: "backward.fill") }
+            Spacer().frame(width: 26)
             Button { state.playPause() } label: {
                 Image(systemName: state.nowPlaying?.isPlaying == true ? "pause.fill" : "play.fill")
             }
+            Spacer().frame(width: 26)
             Button { state.next() } label: { Image(systemName: "forward.fill") }
             Spacer()
+            // Bouton unique de mode de lecture (répétition / aléatoire). Désactivé hors lecture :
+            // l'enceinte refuse d'écrire le mode sans session active (HTTP 401).
+            Button { state.cyclePlayMode() } label: {
+                Image(systemName: state.playMode.systemImage)
+            }
+            .font(.callout)
+            .foregroundStyle(state.playMode.isActive ? Color.accentColor : Color.secondary)
+            .disabled(state.nowPlaying == nil)
+            .help("Mode de lecture : \(state.playMode.displayName)")
         }
         .font(.title3)
         .buttonStyle(.borderless)
     }
 
     private var volumeControl: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
             Button { state.toggleMute() } label: {
                 Image(systemName: state.isMuted ? "speaker.slash.fill" : "speaker.fill")
             }
             .buttonStyle(.borderless)
+            Button { state.stepVolume(up: false) } label: { Image(systemName: "minus") }
+                .buttonStyle(.borderless)
+                .disabled(state.volume <= 0)
             Slider(
                 value: Binding(
-                    get: { Double(state.volume) },
+                    get: { Double(min(state.volume, state.maxVolume)) },
                     set: { state.setVolume(Int($0)) }
                 ),
-                in: 0...100
+                in: 0...Double(max(state.maxVolume, 1))
             )
+            Button { state.stepVolume(up: true) } label: { Image(systemName: "plus") }
+                .buttonStyle(.borderless)
+                .disabled(state.volume >= state.maxVolume)
             Text("\(state.volume)")
                 .font(.caption.monospacedDigit())
                 .frame(width: 26, alignment: .trailing)
@@ -325,6 +361,136 @@ struct ContentView: View {
             }
         }
         .pickerStyle(.menu)
+    }
+
+    /// Notifications affichées par l'enceinte (best-effort — souvent vide). Masqué si rien.
+    @ViewBuilder
+    private var notificationsView: some View {
+        if !state.notifications.isEmpty {
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(Array(state.notifications.enumerated()), id: \.offset) { _, note in
+                    Label(note, systemImage: "bell")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+            }
+        }
+    }
+
+    // MARK: Réglages avancés (DSP, minuterie de veille, file d'attente)
+
+    private var advancedSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Button {
+                withAnimation { showAdvanced.toggle() }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: showAdvanced ? "chevron.down" : "chevron.right")
+                    Text("Réglages avancés")
+                    Spacer()
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if showAdvanced {
+                if state.eqAvailable { dspControls }
+                sleepTimerControls
+                if !state.queue.isEmpty { queueView }
+            }
+        }
+    }
+
+    /// Profil DSP **en lecture seule** (`kef:eqProfile/v2`). L'API refuse l'écriture (HTTP 401),
+    /// donc KefBar affiche le réglage sans le modifier. Masqué si aucun profil n'a été lu.
+    private var dspControls: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack {
+                Text("DSP").font(.caption).foregroundStyle(.secondary)
+                if let name = state.eqProfileName {
+                    Text("· \(name)").font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+            dspRow("Mode bureau", on: state.eqDeskMode)
+            dspRow("Mode mural", on: state.eqWallMode)
+            dspRow("Correction de phase", on: state.eqPhaseCorrection)
+            dspRow("Filtre passe-haut", on: state.eqHighPassMode)
+            dspRow("Sortie caisson", on: state.eqSubwooferOut)
+            HStack {
+                Text("Graves").foregroundStyle(.secondary)
+                Spacer()
+                Text(state.bassExtensionLabel)
+            }
+            .font(.caption2)
+            Text("Lecture seule — réglable dans l'app KEF Connect.")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+        }
+    }
+
+    /// Une ligne DSP « libellé … état » en lecture seule.
+    private func dspRow(_ label: String, on: Bool) -> some View {
+        HStack {
+            Text(label).foregroundStyle(.secondary)
+            Spacer()
+            Image(systemName: on ? "checkmark.circle.fill" : "circle")
+                .foregroundStyle(on ? Color.accentColor : Color.secondary)
+        }
+        .font(.caption2)
+    }
+
+    /// Minuterie de veille : extinction différée, gérée côté app.
+    @ViewBuilder
+    private var sleepTimerControls: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Minuterie de veille").font(.caption).foregroundStyle(.secondary)
+            if let end = state.sleepTimerEnd {
+                HStack {
+                    Label("Extinction à \(Self.clockLabel(end))", systemImage: "moon.zzz.fill")
+                        .font(.caption)
+                    Spacer()
+                    Button("Annuler") { state.cancelSleepTimer() }
+                        .buttonStyle(.borderless)
+                        .font(.caption)
+                }
+            } else {
+                Menu {
+                    ForEach([15, 30, 45, 60, 90], id: \.self) { minutes in
+                        Button("\(minutes) min") { state.startSleepTimer(minutes: minutes) }
+                    }
+                } label: {
+                    Label("Programmer…", systemImage: "moon.zzz")
+                }
+                .font(.caption)
+                .fixedSize()
+            }
+        }
+    }
+
+    /// File d'attente (best-effort). Affichée seulement si l'enceinte en renvoie une.
+    private var queueView: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("File d'attente").font(.caption).foregroundStyle(.secondary)
+            ForEach(state.queue.prefix(8)) { item in
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(item.title).font(.caption).lineLimit(1)
+                    if let artist = item.artist, !artist.isEmpty {
+                        Text(artist).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Formate une heure en `HH:mm`.
+    private static func clockLabel(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm"
+        return formatter.string(from: date)
     }
 
     private var footer: some View {

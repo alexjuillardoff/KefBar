@@ -38,10 +38,22 @@ keyboard — using the same undocumented local API that the KEF Connect app uses
 - ⏻ **Power on / standby**
 - 🎛️ **Source selector** — Wi-Fi, Bluetooth, TV/HDMI, Optical, Coaxial, Aux
 - ⏯️ **Transport** — play / pause, next / previous track
+- 🔁 **Play mode** — cycle repeat-all / repeat-one / shuffle from the transport row
+- 🔒 **Volume limit** — the slider respects the speaker's maximum-volume setting; −/+ buttons step by its volume step
+- 🎛️ **DSP / EQ** *(read-only)* — shows desk/wall mode, phase correction, high-pass, sub out, bass & treble from `kef:eqProfile/v2` (writing is rejected by the speaker — see below)
+- ⏲️ **Sleep timer** — auto power-off after 15 / 30 / 45 / 60 / 90 min
+- 🗒️ **Play queue** *(best-effort)* — upcoming tracks, shown in advanced settings
 - ⌨️ **Media keys** — the Mac's physical play/pause, ⏮/⏭ keys control the speaker; playback also shows up in Control Center
 - 🎵 **Now playing** — title, artist, album artwork and a **progress bar** (elapsed / total)
 - 🔄 **Real-time updates** — subscribes to the speaker's event stream (long-poll) for near-instant refresh, with a polling fallback
+- 🚀 **Launch at login** — optional, via `SMAppService`
 - 🪶 **No Dock icon** — lives quietly in the menu bar (accessory app)
+
+> ⚠️ Verified on an LSX II: **DSP is read-only** — the speaker rejects writes to
+> `kef:eqProfile/v2` (HTTP 401), so KefBar only displays it. The **play-mode** button is
+> disabled while nothing is playing (the speaker refuses mode writes without an active
+> session). *Best-effort* features (play queue, notifications) hide when empty. See
+> [docs/PROTOCOL.md](docs/PROTOCOL.md) §A.11–A.12.
 
 > 💡 DHCP-friendly: speakers are remembered by their **MAC address**, so if a speaker's IP
 > changes, a rescan finds it again and updates the stored address automatically.
@@ -103,10 +115,22 @@ sur votre réseau local.
 - Marche / arrêt (veille)
 - Sélection de source : Wi-Fi, Bluetooth, TV/HDMI, Optique, Coaxial, Aux
 - Lecture / pause, piste suivante / précédente
+- 🔁 **Mode de lecture** : bouton unique répéter tout / répéter la piste / aléatoire dans le transport
+- 🔒 **Limite de volume** : le slider respecte le plafond réglé sur l'enceinte ; boutons −/+ calés sur son pas de volume
+- 🎛️ **DSP / EQ** *(lecture seule)* : affiche mode bureau/mural, correction de phase, filtre passe-haut, sortie caisson, graves & aigus (`kef:eqProfile/v2`) — l'enceinte refuse l'écriture (voir ci-dessous)
+- ⏲️ **Minuterie de veille** : extinction automatique après 15 / 30 / 45 / 60 / 90 min
+- 🗒️ **File d'attente** *(best-effort)* : pistes à venir, dans les réglages avancés
 - ⌨️ **Touches média du clavier** : les touches lecture/pause, ⏮/⏭ du Mac pilotent l'enceinte ; la lecture apparaît aussi dans le Centre de contrôle
 - Titre, artiste, pochette et **barre de progression** (temps écoulé / total) en cours de lecture
 - Mise à jour **temps réel** : abonnement au flux d'évènements de l'enceinte (long-poll), réveil quasi instantané, avec repli sur un sondage périodique
+- 🚀 **Lancement au démarrage** : optionnel, via `SMAppService`
 - Pas d'icône dans le Dock (app accessoire)
+
+> ⚠️ Vérifié sur une LSX II : le **DSP est en lecture seule** — l'enceinte refuse l'écriture sur
+> `kef:eqProfile/v2` (HTTP 401), KefBar se contente de l'afficher. Le bouton de **mode de
+> lecture** est désactivé tant que rien ne joue (l'enceinte refuse d'écrire le mode sans session
+> active). Les fonctions *best-effort* (file d'attente, notifications) se masquent si vides. Cf.
+> [docs/PROTOCOL.md](docs/PROTOCOL.md) §A.11–A.12.
 
 > 💡 Compatible DHCP : chaque enceinte est mémorisée par son **adresse MAC**. Si son IP change,
 > un nouveau scan la retrouve et met l'adresse à jour automatiquement.
@@ -183,6 +207,9 @@ sans TLS ni auth.
 | Transport | `player:player/control` (`roles=activate`) | `{"control":"pause"}` / `"next"` / `"previous"` |
 | Now-playing | `player:player/data` | titre, métadonnées, `icon` (pochette), `state`, durée |
 | Position | `player:player/data/playTime` | → `{"type":"i64_","i64_":...}` (ms) |
+| Mode de lecture | `settings:/mediaPlayer/playMode` | type `playerPlayMode` (écriture refusée hors lecture) |
+| Volume max / pas | `settings:/kef/host/maximumVolume` · `…/volumeStep` (`i16_`) | `i32_` / `i16_` (lecture) |
+| DSP / EQ | `kef:eqProfile/v2` | objet `kefEqProfileV2` — **lecture seule** (écriture 401) |
 
 > Temps réel : abonnement via `POST /api/event/modifyQueue` puis long-poll
 > `GET /api/event/pollQueue?queueId=<uuid>&timeout=10` (cf. [docs/PROTOCOL.md](docs/PROTOCOL.md)

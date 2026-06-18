@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import ServiceManagement
 import SwiftUI
 
 /// État partagé de l'app : configuration, état des enceintes, et actions.
@@ -12,6 +13,7 @@ final class AppState: ObservableObject {
             UserDefaults.standard.set(host, forKey: Self.hostKey)
             client = host.isEmpty ? nil : KefClient(host: host)
             positionMs = 0
+            resetPerSpeakerState()
             // Si le flux d'évènements tourne, on le relance pour s'abonner à la nouvelle
             // enceinte (le ré-abonnement déclenche un rafraîchissement). Sinon, simple refresh.
             if eventTask != nil {
@@ -46,6 +48,38 @@ final class AppState: ObservableObject {
     @Published private(set) var deviceName: String?
     @Published private(set) var lastError: String?
 
+    /// Mode de lecture courant (répétition / aléatoire).
+    @Published private(set) var playMode: PlayMode = .normal
+    /// Volume maximum autorisé (plafond réglé sur l'enceinte) : borne haute du slider.
+    @Published private(set) var maxVolume: Int = 100
+    /// Pas des boutons −/+ de volume.
+    @Published private(set) var volumeStep: Int = 5
+
+    /// Réglages DSP (miroirs **lecture seule** du profil `kef:eqProfile/v2`). L'écriture est
+    /// refusée par l'enceinte (HTTP 401) — on affiche le profil sans le modifier. `eqAvailable`
+    /// reste `false` tant qu'aucun profil exploitable n'a été lu (section masquée alors).
+    @Published private(set) var eqAvailable = false
+    @Published private(set) var eqProfileName: String?
+    @Published private(set) var eqDeskMode = false
+    @Published private(set) var eqWallMode = false
+    @Published private(set) var eqPhaseCorrection = false
+    @Published private(set) var eqHighPassMode = false
+    @Published private(set) var eqSubwooferOut = false
+    @Published private(set) var eqBassExtension = "standard"
+    @Published private(set) var eqTrebleAmount = 0
+
+    /// File d'attente et notifications (best-effort — chargées à l'ouverture des réglages avancés).
+    @Published private(set) var queue: [QueueItem] = []
+    @Published private(set) var notifications: [String] = []
+
+    /// Heure d'extinction programmée par la minuterie de veille (`nil` = pas de minuterie).
+    @Published private(set) var sleepTimerEnd: Date?
+
+    /// Lancement de l'app à l'ouverture de session (login item via `SMAppService`).
+    @Published var launchAtLogin: Bool {
+        didSet { applyLaunchAtLogin(launchAtLogin) }
+    }
+
     var isMuted: Bool { volume == 0 }
 
     /// L'enceinte enregistrée correspondant à l'IP active, si elle existe.
@@ -62,12 +96,20 @@ final class AppState: ObservableObject {
     private var coverURLShown: URL?
     private var coverTask: Task<Void, Never>?
 
+    /// Caches par enceinte : configuration de volume et profil DSP ne sont lus qu'une fois
+    /// (remis à zéro au changement d'`host`).
+    private var volumeConfigLoaded = false
+    private var eqLoaded = false
+    /// Minuterie de veille (extinction différée, côté app).
+    private var sleepTask: Task<Void, Never>?
+
     /// Touches média du clavier + intégration « En cours de lecture » de macOS.
     private let nowPlayingCenter = NowPlayingCenter()
 
     init() {
         let savedHost = UserDefaults.standard.string(forKey: Self.hostKey) ?? ""
         host = savedHost
+        launchAtLogin = Self.isLaunchAtLoginEnabled()
 
         var speakers = Self.loadSpeakers()
         // Migration : un utilisateur d'une version précédente n'a qu'une IP — on la
@@ -101,6 +143,7 @@ final class AppState: ObservableObject {
             let np = try? await client.nowPlaying()
             let name = try? await client.deviceName()
             let pos = try? await client.playPosition()
+            let mode = try? await client.playMode()
 
             let trackChanged = np?.title != nowPlaying?.title
             isOn = on
@@ -111,6 +154,7 @@ final class AppState: ObservableObject {
             updateCover(np?.coverURL)
             // Position : on prend la valeur lue ; à défaut on remet à zéro au changement de piste.
             if let pos { positionMs = pos } else if trackChanged { positionMs = 0 }
+            if let mode { playMode = mode }
             if let name {
                 deviceName = name
                 updateActiveSpeakerName(name)
@@ -119,6 +163,9 @@ final class AppState: ObservableObject {
             lastError = nil
             nowPlayingCenter.update(nowPlaying: np, isOn: on,
                                     elapsed: pos.map { TimeInterval($0) / 1000 })
+            // Configuration peu changeante (plafond de volume, profil DSP) : lue une seule fois
+            // par enceinte, sans bloquer le rafraîchissement principal.
+            await loadSpeakerConfigIfNeeded()
         } catch {
             isReachable = false
             report(error)
@@ -221,7 +268,8 @@ final class AppState: ObservableObject {
     // MARK: - Volume (avec anti-rebond pour ne pas saturer l'enceinte au drag)
 
     func setVolume(_ value: Int) {
-        let clamped = max(0, min(100, value))
+        // Borne haute = plafond réglé sur l'enceinte (`maxVolume`, 100 par défaut).
+        let clamped = max(0, min(maxVolume, value))
         if clamped > 0 { previousVolume = clamped }
         volume = clamped
         volumeSendTask?.cancel()
@@ -279,6 +327,162 @@ final class AppState: ObservableObject {
                 await refresh()
             } catch { report(error) }
         }
+    }
+
+    // MARK: - Mode de lecture (répétition / aléatoire)
+
+    /// Bouton unique : passe au mode suivant (normal → répéter tout → répéter la piste →
+    /// aléatoire → …). Mise à jour optimiste puis écriture.
+    func cyclePlayMode() {
+        guard let client else { return }
+        let newMode = playMode.next
+        playMode = newMode
+        Task {
+            do { try await client.setPlayMode(newMode) } catch { report(error) }
+        }
+    }
+
+    // MARK: - Boutons de volume −/+
+
+    /// Monte/descend le volume d'un `volumeStep` (borné à `maxVolume` par `setVolume`).
+    func stepVolume(up: Bool) {
+        setVolume(volume + (up ? volumeStep : -volumeStep))
+    }
+
+    // MARK: - Configuration peu changeante (plafond volume + DSP), lue une fois par enceinte
+
+    /// Lit, **une seule fois par enceinte**, le plafond de volume, le pas, et le profil DSP.
+    /// Appelée à la fin de `refresh()` ; n'écrase rien si les lectures échouent.
+    private func loadSpeakerConfigIfNeeded() async {
+        guard let client else { return }
+        if !volumeConfigLoaded {
+            volumeConfigLoaded = true
+            if let m = try? await client.maximumVolume(), (1...100).contains(m) { maxVolume = m }
+            if let s = try? await client.volumeStep(), (1...50).contains(s) { volumeStep = s }
+            if volume > maxVolume { volume = maxVolume }
+        }
+        if !eqLoaded {
+            eqLoaded = true
+            await refreshEQ()
+        }
+    }
+
+    // MARK: - DSP / Profil EQ (lecture seule)
+
+    /// Relit le profil DSP (`kef:eqProfile/v2`) et met à jour les miroirs **lecture seule**.
+    /// Tolérant : un profil illisible laisse `eqAvailable = false` (section DSP masquée).
+    func refreshEQ() async {
+        guard let client else { return }
+        guard let value = (try? await client.eqProfile()) ?? nil else { eqAvailable = false; return }
+        eqProfileName = (value["profileName"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        eqDeskMode = Self.bool(value["deskMode"]) ?? false
+        eqWallMode = Self.bool(value["wallMode"]) ?? false
+        eqPhaseCorrection = Self.bool(value["phaseCorrection"]) ?? false
+        eqHighPassMode = Self.bool(value["highPassMode"]) ?? false
+        eqSubwooferOut = Self.bool(value["subwooferOut"]) ?? false
+        eqBassExtension = (value["bassExtension"] as? String) ?? "standard"
+        eqTrebleAmount = (value["trebleAmount"] as? NSNumber)?.intValue ?? 0
+        eqAvailable = true
+    }
+
+    /// Libellé lisible de l'extension des graves.
+    var bassExtensionLabel: String {
+        switch eqBassExtension {
+        case "less":  return "Réduite"
+        case "extra": return "Étendue"
+        default:       return "Standard"
+        }
+    }
+
+    /// Lit un booléen tolérant aux formes `bool_`/entier 0-1/chaîne.
+    private static func bool(_ any: Any?) -> Bool? {
+        if let b = any as? Bool { return b }
+        if let n = any as? NSNumber { return n.boolValue }
+        if let s = any as? String { return s == "true" || s == "1" }
+        return nil
+    }
+
+    // MARK: - File d'attente & notifications (best-effort)
+
+    func refreshQueue() async {
+        guard let client else { return }
+        queue = (try? await client.playQueue()) ?? []
+    }
+
+    func refreshNotifications() async {
+        guard let client else { return }
+        notifications = (try? await client.notifications()) ?? []
+    }
+
+    // MARK: - Minuterie de veille (extinction différée, côté app)
+
+    var sleepTimerActive: Bool { sleepTimerEnd != nil }
+
+    /// Programme l'extinction de l'enceinte dans `minutes`. Annule une minuterie en cours.
+    func startSleepTimer(minutes: Int) {
+        cancelSleepTimer()
+        guard minutes > 0 else { return }
+        sleepTimerEnd = Date().addingTimeInterval(TimeInterval(minutes * 60))
+        sleepTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(minutes) * 60 * 1_000_000_000)
+            guard !Task.isCancelled, let self else { return }
+            self.sleepTimerEnd = nil
+            self.sleepTask = nil
+            await self.powerOffNow()
+        }
+    }
+
+    func cancelSleepTimer() {
+        sleepTask?.cancel()
+        sleepTask = nil
+        sleepTimerEnd = nil
+    }
+
+    private func powerOffNow() async {
+        guard let client else { return }
+        do { try await client.powerOff(); isOn = false } catch { report(error) }
+        await refresh()
+    }
+
+    // MARK: - Lancement à l'ouverture de session (login item)
+
+    /// Évite la récursion du `didSet` quand on resynchronise l'interrupteur après un échec.
+    private var suppressLaunchDidSet = false
+
+    private static func isLaunchAtLoginEnabled() -> Bool {
+        SMAppService.mainApp.status == .enabled
+    }
+
+    /// Enregistre/retire le login item. Nécessite le **bundle `.app`** (un `CFBundleIdentifier`) :
+    /// sans lui (`swift run`), l'opération échoue proprement et l'interrupteur se resynchronise.
+    private func applyLaunchAtLogin(_ enabled: Bool) {
+        guard !suppressLaunchDidSet else { return }
+        let service = SMAppService.mainApp
+        do {
+            switch (enabled, service.status) {
+            case (true, let s) where s != .enabled:  try service.register()
+            case (false, .enabled):                   try service.unregister()
+            default:                                   break
+            }
+        } catch {
+            report(error)
+            suppressLaunchDidSet = true
+            launchAtLogin = (service.status == .enabled)
+            suppressLaunchDidSet = false
+        }
+    }
+
+    /// Réinitialise l'état spécifique à une enceinte au changement d'`host`.
+    private func resetPerSpeakerState() {
+        volumeConfigLoaded = false
+        eqLoaded = false
+        maxVolume = 100
+        volumeStep = 5
+        playMode = .normal
+        eqAvailable = false
+        eqProfileName = nil
+        queue = []
+        notifications = []
     }
 
     // MARK: - Multi-enceintes & découverte

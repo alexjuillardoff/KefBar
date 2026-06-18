@@ -54,6 +54,28 @@ struct KefClient {
         return first
     }
 
+    /// GET /api/getData mais renvoie **tout** le tableau de réponse (pas seulement le premier
+    /// objet). Utile pour les lectures `roles=rows` (file d'attente, notifications) dont la
+    /// réponse est une liste d'éléments. Renvoie un tableau vide si le corps n'est pas une liste.
+    private func getDataArray(path: String, roles: String = "value") async throws -> [[String: Any]] {
+        var comps = URLComponents(string: "http://\(host)/api/getData")!
+        comps.queryItems = [
+            URLQueryItem(name: "path", value: path),
+            URLQueryItem(name: "roles", value: roles),
+        ]
+        var req = URLRequest(url: comps.url!)
+        req.httpMethod = "GET"
+
+        let (data, resp) = try await session.data(for: req)
+        try Self.validate(resp)
+
+        let json = try JSONSerialization.jsonObject(with: data)
+        // Réponse `rows` tolérante : une file vide renvoie `[null]` (vérifié sur LSX II), et une
+        // file remplie peut mêler éléments `null` et objets. On ne garde que les objets.
+        guard let array = json as? [Any] else { return [] }
+        return array.compactMap { $0 as? [String: Any] }
+    }
+
     /// POST /api/setData
     private func setData(path: String, value: [String: Any], roles: String = "value") async throws {
         var req = URLRequest(url: URL(string: "http://\(host)/api/setData")!)
@@ -77,6 +99,31 @@ struct KefClient {
         if let n = any as? NSNumber { return n.intValue }
         if let s = any as? String { return Int(s) }
         return nil
+    }
+
+    /// Extrait un entier quelle que soit la largeur typée renvoyée par l'enceinte. Vérifié sur
+    /// LSX II : `volumeStep` arrive en **`i16_`**, pas `i32_` — d'où ce balayage des clés.
+    private static func anyInt(_ obj: [String: Any]) -> Int? {
+        for key in ["i32_", "i16_", "i64_", "i8_", "u32_", "u16_", "u8_", "u64_"] {
+            if let v = int(obj[key]) { return v }
+        }
+        return nil
+    }
+
+    /// Extrait la chaîne d'un objet réponse, tolérant à la forme : `string_` explicite, sinon
+    /// la valeur typée pointée par `type` (p.ex. `{"type":"playMode","playMode":"shuffle"}`).
+    private static func string(_ obj: [String: Any]) -> String? {
+        if let s = obj["string_"] as? String { return s }
+        if let type = obj["type"] as? String, let s = obj[type] as? String { return s }
+        return nil
+    }
+
+    /// Extrait la valeur typée pointée par `type` quand c'est un objet imbriqué
+    /// (p.ex. `kef:eqProfile/v2` → `{"type":"kefEqProfileV2","kefEqProfileV2":{ … profil … }}`).
+    /// Renvoie aussi le `type` d'enveloppe.
+    private static func typedObject(_ obj: [String: Any]) -> (type: String, value: [String: Any])? {
+        guard let type = obj["type"] as? String, let value = obj[type] as? [String: Any] else { return nil }
+        return (type, value)
     }
 
     /// Construit l'URL de pochette en relevant le schéma en **HTTPS** pour les hôtes publics.
@@ -111,7 +158,7 @@ struct KefClient {
 
     func volume() async throws -> Int {
         let obj = try await getData(path: "player:volume")
-        return Self.int(obj["i32_"]) ?? 0
+        return Self.anyInt(obj) ?? 0
     }
 
     func setVolume(_ value: Int) async throws {
@@ -192,7 +239,7 @@ struct KefClient {
     /// Position de lecture courante en millisecondes (`player:player/data/playTime`, `i64_`).
     func playPosition() async throws -> Int {
         let obj = try await getData(path: "player:player/data/playTime")
-        return Self.int(obj["i64_"]) ?? Self.int(obj["i32_"]) ?? 0
+        return Self.anyInt(obj) ?? 0
     }
 
     // MARK: - Infos appareil (optionnel)
@@ -206,6 +253,89 @@ struct KefClient {
     func macAddress() async throws -> String? {
         let obj = try await getData(path: "settings:/system/primaryMacAddress")
         return obj["string_"] as? String
+    }
+
+    // MARK: - Limite de volume
+
+    /// Volume maximum configuré sur l'enceinte (`settings:/kef/host/maximumVolume`). Sert à
+    /// borner le slider pour ne pas dépasser le plafond réglé dans KEF Connect.
+    func maximumVolume() async throws -> Int? {
+        let obj = try await getData(path: "settings:/kef/host/maximumVolume")
+        return Self.anyInt(obj)
+    }
+
+    /// Pas de volume (`settings:/kef/host/volumeStep`) : incrément des boutons −/+.
+    /// Vérifié sur LSX II : renvoyé en `i16_`.
+    func volumeStep() async throws -> Int? {
+        let obj = try await getData(path: "settings:/kef/host/volumeStep")
+        return Self.anyInt(obj)
+    }
+
+    // MARK: - Mode de lecture (répétition / aléatoire)
+
+    /// Lit le mode de lecture (`settings:/mediaPlayer/playMode`). Vérifié sur LSX II : la valeur
+    /// est typée **`playerPlayMode`** (p.ex. `"normal"`). Lecture tolérante.
+    func playMode() async throws -> PlayMode {
+        let obj = try await getData(path: "settings:/mediaPlayer/playMode")
+        return PlayMode(apiValue: Self.string(obj) ?? "normal")
+    }
+
+    /// Écrit le mode de lecture (enveloppe `playerPlayMode`, confirmée par la lecture).
+    /// ⚠️ Vérifié sur LSX II : l'écriture est **refusée (HTTP 401) quand rien ne joue** —
+    /// elle ne s'applique qu'avec une session de lecture active. Les libellés des valeurs autres
+    /// que `normal` restent à confirmer en lecture.
+    func setPlayMode(_ mode: PlayMode) async throws {
+        try await setData(path: "settings:/mediaPlayer/playMode",
+                          value: ["type": "playerPlayMode", "playerPlayMode": mode.apiValue])
+    }
+
+    // MARK: - DSP / Profil EQ (lecture seule)
+
+    /// Lit le profil DSP de l'enceinte. Chemin vérifié sur LSX II : **`kef:eqProfile/v2`**
+    /// (type `kefEqProfileV2`) — `kef:eqProfile` (sans `/v2`) **n'existe pas**. Renvoie l'objet
+    /// interne (deskMode, wallMode, phaseCorrection, bassExtension, trebleAmount, profileName…).
+    ///
+    /// ⚠️ **Lecture seule.** Vérifié sur LSX II : toute écriture sur `kef:eqProfile/v2` est
+    /// **refusée (HTTP 401 « Forbidden »)** — objet complet, partiel, ou sous-chemin de feuille
+    /// (`/deskMode` n'existe pas). KEF Connect modifie donc le DSP par un mécanisme non encore
+    /// rétro-ingénierié. KefBar se contente d'**afficher** le profil. Cf. PROTOCOL.md A.12.
+    func eqProfile() async throws -> [String: Any]? {
+        let obj = try await getData(path: "kef:eqProfile/v2")
+        return Self.typedObject(obj)?.value
+    }
+
+    // MARK: - File d'attente & notifications (best-effort)
+
+    /// File d'attente / pistes à venir (`playlists:pq/getitems`, `roles=rows`). Parsing
+    /// **défensif** : la forme des « rows » KEF est mal documentée — on tente plusieurs
+    /// emplacements de titre/artiste et on ignore les éléments non exploitables.
+    func playQueue() async throws -> [QueueItem] {
+        let rows = try await getDataArray(path: "playlists:pq/getitems", roles: "rows")
+        var items: [QueueItem] = []
+        for (index, row) in rows.enumerated() {
+            // L'élément peut être { title, … } à plat, ou imbriqué sous trackRoles/mediaData.
+            let trackRoles = row["trackRoles"] as? [String: Any]
+            let metaData = (trackRoles?["mediaData"] as? [String: Any])?["metaData"] as? [String: Any]
+            let title = (row["title"] as? String)
+                ?? (trackRoles?["title"] as? String)
+                ?? (metaData?["title"] as? String)
+            guard let title, !title.isEmpty else { continue }
+            let artist = (row["artist"] as? String) ?? (metaData?["artist"] as? String)
+            items.append(QueueItem(id: index, title: title, artist: artist))
+        }
+        return items
+    }
+
+    /// Notifications affichées par l'enceinte (`notifications:/display/queue`, `roles=rows`).
+    /// Best-effort : on extrait un texte lisible de chaque ligne, en ignorant le reste.
+    func notifications() async throws -> [String] {
+        let rows = try await getDataArray(path: "notifications:/display/queue", roles: "rows")
+        return rows.compactMap { row in
+            (row["title"] as? String)
+                ?? (row["message"] as? String)
+                ?? (row["text"] as? String)
+                ?? Self.string(row)
+        }.filter { !$0.isEmpty }
     }
 
     // MARK: - Push temps réel (long-poll d'événements)

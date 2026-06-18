@@ -111,14 +111,16 @@ Toute lecture renvoie un **tableau JSON à un seul élément**, dont l'objet por
 | **Transport** | `player:player/control` | **`activate`** | `{"control":"pause"\|"next"\|"previous"}` |
 | **Lecture en cours** | `player:player/data` | `value` | objet imbriqué (voir A.5) |
 | **Position de lecture** | `player:player/data/playTime` | `value` | `i64_` en ms (voir A.5) |
-| Mode lecture (repeat/shuffle) | `settings:/mediaPlayer/playMode` | `value` | — |
-| Volume max | `settings:/kef/host/maximumVolume` | `value` | `i32_` (lecture) |
-| Limite de volume | `settings:/kef/host/volumeLimit` | `value` | `i32_` (lecture) |
-| Pas de volume | `settings:/kef/host/volumeStep` | `value` | `i32_` (lecture) |
+| Mode lecture (repeat/shuffle) | `settings:/mediaPlayer/playMode` | `value` | type **`playerPlayMode`** — **implémenté** ; écriture refusée hors lecture (voir A.11) |
+| Volume max | `settings:/kef/host/maximumVolume` | `value` | `i32_` (lecture) — **implémenté** : borne le slider |
+| Limite de volume | `settings:/kef/host/volumeLimit` | `value` | **`bool_`** (lecture) — activée ou non |
+| Pas de volume | `settings:/kef/host/volumeStep` | `value` | **`i16_`** (lecture) — **implémenté** : pas des boutons −/+ |
 | Nom de l'appareil | `settings:/deviceName` | `value` | `string_` |
 | Adresse MAC | `settings:/system/primaryMacAddress` | `value` | `string_` |
 | Version firmware | `settings:/releasetext` | `value` | `string_` |
-| Profil EQ | `kef:eqProfile` | `value` | objet |
+| Profil EQ / DSP | **`kef:eqProfile/v2`** | `value` | objet `kefEqProfileV2` — **implémenté en lecture seule** (écriture 401, voir A.12) |
+| File d'attente | `playlists:pq/getitems` | **`rows`** | liste (vide = `[null]`) — **implémenté** (voir A.11) |
+| Notifications | `notifications:/display/queue` | **`rows`** | liste (vide = `[null]`) — **implémenté** (voir A.11) |
 | Infos réseau | `network:info` | `value` | objet imbriqué (wifi/IP) |
 
 > ⚠️ Le **transport** utilise `roles=activate`, **pas** `value`. C'est la seule opération
@@ -331,6 +333,77 @@ func setSource(_ source: Source) async throws {
                       value: ["type": "kefPhysicalSource", "kefPhysicalSource": source.apiValue])
 }
 ```
+
+## A.11 Mode de lecture, file d'attente & notifications
+
+> ✅ **Vérifié sur matériel (LSX II, firmware mi-2026).** Détails de réponse réels ci-dessous.
+
+### Mode de lecture — `settings:/mediaPlayer/playMode`
+
+Réglage répétition/aléatoire, modélisé par KefBar en **cycle** de modes mutuellement exclusifs.
+
+- **Lire** : `getData settings:/mediaPlayer/playMode` →
+  `[{"playerPlayMode":"normal","type":"playerPlayMode"}]`. Valeur **typée `playerPlayMode`**
+  (lue tolérante : `string_` ou valeur pointée par `type`). À l'arrêt, vaut `normal`.
+- **Écrire** : `setData` avec `{"type":"playerPlayMode","playerPlayMode":"<mode>"}`.
+  ⚠️ **Vérifié** : l'écriture est **refusée (HTTP 401 « Forbidden ») quand rien ne joue** —
+  elle ne s'applique qu'avec une **session de lecture active**. KefBar **désactive** donc le
+  bouton de mode hors lecture. Les libellés des modes autres que `normal` (`repeatAll`/
+  `repeatOne`/`shuffle` — supposés) restent à confirmer en lecture, faute de session active.
+- Implémenté par [`KefClient.playMode()` / `setPlayMode(_:)`](../Sources/KefBar/KefClient.swift).
+
+### File d'attente — `playlists:pq/getitems` (`roles=rows`)
+
+Lecture en **`rows`** : la réponse est une **liste** (pas l'enveloppe à un élément des lectures
+`value`). ⚠️ **Vérifié** : une file **vide** renvoie `[null]` (un tableau contenant `null`).
+KefBar parse donc le tableau en **ne gardant que les objets** (`compactMap`), puis extrait par
+ligne un titre/artiste (`title` à plat, ou `trackRoles.title` +
+`trackRoles.mediaData.metaData.artist`). Implémenté par
+[`KefClient.playQueue()`](../Sources/KefBar/KefClient.swift).
+
+### Notifications — `notifications:/display/queue` (`roles=rows`)
+
+Idem en `rows` : renvoie aussi `[null]` à vide (vérifié). KefBar extrait un texte lisible de
+chaque ligne objet (`title` / `message` / `text`, ou valeur typée). Implémenté par
+[`KefClient.notifications()`](../Sources/KefBar/KefClient.swift).
+
+> Ces deux chemins figurent déjà dans la charge utile d'abonnement aux évènements (A.8) avec
+> `"type":"rows"` — d'où le choix de `roles=rows` en lecture.
+
+## A.12 DSP / Profil EQ — `kef:eqProfile/v2` *(lecture seule)*
+
+> ✅ **Vérifié sur matériel (LSX II).** Chemin, type et clés réels ci-dessous. ⚠️ **Écriture
+> impossible** par cette voie (voir plus bas).
+
+Le chemin correct est **`kef:eqProfile/v2`** — `kef:eqProfile` (sans `/v2`) renvoie
+`Node ... does not exist`. La réponse est un objet typé **`kefEqProfileV2`** :
+
+```jsonc
+[{ "type": "kefEqProfileV2", "kefEqProfileV2": {
+  "deskMode": false, "deskModeSetting": -3,
+  "wallMode": true,  "wallModeSetting": -6.5, "wallMounted": false,
+  "phaseCorrection": false, "highPassMode": false, "highPassModeFreq": 95,
+  "bassExtension": "standard",            // "standard" | "less" | "extra"
+  "trebleAmount": 1, "balance": 0, "audioPolarity": "normal",
+  "subwooferOut": false, "subOutLPFreq": 80, "subwooferGain": 0,
+  "subwooferPolarity": "normal", "subwooferPreset": "custom", "subwooferCount": 0,
+  "soundProfile": "default", "profileName": "Alex", "profileId": "<uuid>",
+  "isExpertMode": true, "isEqMode": false, "dialogueMode": false /* … */
+}}]
+```
+
+**⚠️ Lecture seule — écriture refusée.** Vérifié sur LSX II : **toute** écriture sur
+`kef:eqProfile/v2` renvoie **HTTP 401 « Forbidden »** — objet complet, objet partiel, avec ou
+sans `profileId`. Les sous-chemins de feuille (p.ex. `kef:eqProfile/v2/deskMode`) **n'existent
+pas** (HTTP 500 « does not exist »). KEF Connect modifie donc le DSP par un mécanisme **non
+encore rétro-ingénierié** (probable gestion de profils via un autre endpoint). KefBar se
+contente d'**afficher** le profil. Implémenté par
+[`KefClient.eqProfile()`](../Sources/KefBar/KefClient.swift) (lecture) et
+[`AppState.refreshEQ()`](../Sources/KefBar/AppState.swift).
+
+> Rappel : en **gén. 1**, le DSP passe par des registres binaires dédiés (desk/wall/treble/
+> high-pass/sub — cf. [B.3](#b3-registres)) et y est **modifiable**. En gén. 2, il est lisible
+> via `kef:eqProfile/v2` mais l'écriture locale reste à percer.
 
 ---
 
