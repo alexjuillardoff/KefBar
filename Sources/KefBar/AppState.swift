@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import SwiftUI
 
@@ -37,6 +38,9 @@ final class AppState: ObservableObject {
     @Published var volume: Int = 0
     @Published private(set) var source: Source = .wifi
     @Published private(set) var nowPlaying: NowPlaying?
+    /// Pochette du morceau en cours, déjà décodée. Chargée par nos soins (cf. `updateCover`)
+    /// plutôt que via `AsyncImage`, qui ne s'affiche pas de façon fiable dans le popover.
+    @Published private(set) var coverImage: NSImage?
     /// Position de lecture courante en millisecondes (alimente la barre de progression).
     @Published private(set) var positionMs: Int = 0
     @Published private(set) var deviceName: String?
@@ -55,6 +59,8 @@ final class AppState: ObservableObject {
     private var eventTask: Task<Void, Never>?
     private var positionTask: Task<Void, Never>?
     private var volumeSendTask: Task<Void, Never>?
+    private var coverURLShown: URL?
+    private var coverTask: Task<Void, Never>?
 
     /// Touches média du clavier + intégration « En cours de lecture » de macOS.
     private let nowPlayingCenter = NowPlayingCenter()
@@ -84,6 +90,7 @@ final class AppState: ObservableObject {
     func refresh() async {
         guard let client else {
             isReachable = false
+            updateCover(nil)
             nowPlayingCenter.update(nowPlaying: nil, isOn: false)
             return
         }
@@ -101,6 +108,7 @@ final class AppState: ObservableObject {
             if vol > 0 { previousVolume = vol }
             if src != .standby { source = src; lastSource = src }
             nowPlaying = np
+            updateCover(np?.coverURL)
             // Position : on prend la valeur lue ; à défaut on remet à zéro au changement de piste.
             if let pos { positionMs = pos } else if trackChanged { positionMs = 0 }
             if let name {
@@ -185,6 +193,29 @@ final class AppState: ObservableObject {
               let ms = try? await client.playPosition() else { return }
         positionMs = ms
         nowPlayingCenter.updatePosition(elapsed: TimeInterval(ms) / 1000, isPlaying: true)
+    }
+
+    // MARK: - Pochette
+
+    /// Charge la pochette en `NSImage` (via `URLSession`, chemin éprouvé) au lieu de s'en
+    /// remettre à `AsyncImage`, qui ne s'affiche pas de façon fiable dans un popover
+    /// `MenuBarExtra`. Ne recharge que si l'URL a changé ; garde l'image précédente le temps
+    /// du chargement pour éviter un clignotement.
+    private func updateCover(_ url: URL?) {
+        guard url != coverURLShown else { return }
+        coverURLShown = url
+        coverTask?.cancel()
+        guard let url else { coverImage = nil; return }
+        coverTask = Task { [weak self] in
+            let image = await Self.loadImage(url)
+            guard !Task.isCancelled, let self, self.coverURLShown == url else { return }
+            self.coverImage = image
+        }
+    }
+
+    private static func loadImage(_ url: URL) async -> NSImage? {
+        guard let (data, _) = try? await URLSession.shared.data(from: url) else { return nil }
+        return NSImage(data: data)
     }
 
     // MARK: - Volume (avec anti-rebond pour ne pas saturer l'enceinte au drag)

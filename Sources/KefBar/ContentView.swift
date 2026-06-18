@@ -238,14 +238,12 @@ struct ContentView: View {
 
     @ViewBuilder
     private var cover: some View {
-        if let url = state.nowPlaying?.coverURL {
-            AsyncImage(url: url) { image in
-                image.resizable().aspectRatio(contentMode: .fill)
-            } placeholder: {
-                placeholderCover
-            }
-            .frame(width: 44, height: 44)
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+        if let image = state.coverImage {
+            Image(nsImage: image)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+                .frame(width: 44, height: 44)
+                .clipShape(RoundedRectangle(cornerRadius: 6))
         } else {
             placeholderCover
         }

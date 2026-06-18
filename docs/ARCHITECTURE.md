@@ -86,13 +86,15 @@ des callbacks (touches → actions).
 | `volume` | `Int` | lecture/écriture |
 | `source` | `Source` | `private(set)` |
 | `nowPlaying` | `NowPlaying?` | `private(set)` |
+| `coverImage` | `NSImage?` | `private(set)` — pochette déjà décodée (chargée par `updateCover`) |
 | `positionMs` | `Int` | `private(set)` — position de lecture (ms) |
 | `deviceName` | `String?` | `private(set)` |
 | `lastError` | `String?` | `private(set)` |
 | `isMuted` | `Bool` | calculé : `volume == 0` |
 
 État privé : `client: KefClient?`, `lastSource: Source`, `previousVolume: Int = 20`,
-`eventTask`, `positionTask`, `volumeSendTask`. Clé de persistance : `"kef.host"` (UserDefaults).
+`eventTask`, `positionTask`, `volumeSendTask`, `coverURLShown`/`coverTask`. Clé de persistance :
+`"kef.host"` (UserDefaults).
 
 Actions : `refresh()`, `startEventStream()`, `stopEventStream()`, `startPositionTicker()`,
 `stopPositionTicker()`, `setVolume(_:)`, `toggleMute()`, `togglePower()`, `select(_:)`,
@@ -254,6 +256,22 @@ Détails :
   l'URL change (`publishedArtworkURL`) — sinon chaque rafraîchissement la rechargerait sans cesse.
 - **Bundle obligatoire.** L'intégration MediaPlayer exige un `CFBundleIdentifier` : elle ne
   fonctionne **que** depuis `KefBar.app`, pas en `swift run` (cf. §8).
+
+### Pochette dans le popover
+
+Deux pièges, deux parades :
+
+1. **HTTP en clair vers Internet.** L'`icon` du now-playing pointe souvent vers le CDN du
+   service en `http://` (p.ex. `resources.tidal.com`). App Transport Security bloque le HTTP
+   clair vers un hôte **public** (l'`Info.plist` n'autorise le clair que vers le LAN, via
+   `NSAllowsLocalNetworking`). [`KefClient.artworkURL(from:)`](../Sources/KefBar/KefClient.swift)
+   relève donc le schéma en `https://` pour les hôtes publics (ces CDN servent en HTTPS) et
+   laisse en HTTP les pochettes servies par l'enceinte (IP locale / AirPlay).
+2. **`AsyncImage` peu fiable en popover `MenuBarExtra`.** L'image se charge correctement via
+   `URLSession`, mais `AsyncImage` ne la rend pas de façon fiable dans ce contexte. `AppState`
+   charge donc la pochette lui-même en `NSImage`
+   ([`updateCover`](../Sources/KefBar/AppState.swift), rechargée seulement quand l'URL change)
+   et `ContentView` l'affiche via `Image(nsImage:)`.
 
 ### Gestion d'erreur
 

@@ -79,6 +79,34 @@ struct KefClient {
         return nil
     }
 
+    /// Construit l'URL de pochette en relevant le schéma en **HTTPS** pour les hôtes publics.
+    ///
+    /// App Transport Security bloque le HTTP en clair vers Internet ; or l'API KEF renvoie
+    /// souvent l'`icon` en `http://` (CDN du service — p.ex. `resources.tidal.com`, qui sert
+    /// aussi en HTTPS). On bascule donc ces URLs en `https://`. Les pochettes servies par
+    /// l'enceinte elle-même (IP locale, AirPlay) restent en HTTP : elles sont autorisées par
+    /// `NSAllowsLocalNetworking` et l'enceinte ne sert pas de HTTPS.
+    private static func artworkURL(from raw: String) -> URL? {
+        guard var comps = URLComponents(string: raw) else { return nil }
+        if comps.scheme == "http", let host = comps.host, !isLocalHost(host) {
+            comps.scheme = "https"
+        }
+        return comps.url
+    }
+
+    /// `true` pour un hôte du réseau local (IP privée/loopback/link-local ou `.local`),
+    /// qu'il ne faut pas basculer en HTTPS.
+    private static func isLocalHost(_ host: String) -> Bool {
+        if host == "localhost" || host.hasSuffix(".local") { return true }
+        if host.hasPrefix("10.") || host.hasPrefix("192.168.")
+            || host.hasPrefix("127.") || host.hasPrefix("169.254.") { return true }
+        if host.hasPrefix("172.") {
+            let parts = host.split(separator: ".")
+            if parts.count >= 2, let second = Int(parts[1]), (16...31).contains(second) { return true }
+        }
+        return false
+    }
+
     // MARK: - Volume
 
     func volume() async throws -> Int {
@@ -141,7 +169,7 @@ struct KefClient {
         let title = trackRoles?["title"] as? String
         let artist = metaData?["artist"] as? String
         let album = metaData?["album"] as? String
-        let cover = (trackRoles?["icon"] as? String).flatMap(URL.init(string:))
+        let cover = (trackRoles?["icon"] as? String).flatMap(Self.artworkURL(from:))
 
         // Durée : aucun emplacement n'est garanti (dépend du service). On essaie les formes
         // observées, dans l'ordre, et on accepte l'absence (lecture sans durée connue).

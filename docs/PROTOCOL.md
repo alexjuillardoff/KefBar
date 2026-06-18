@@ -183,8 +183,16 @@ Correspondance de parsing (`pykefcontrol`) :
 | Artiste | `trackRoles.mediaData.metaData.artist` |
 | Album | `trackRoles.mediaData.metaData.album` |
 | Artiste de l'album | `trackRoles.mediaData.metaData.albumArtist` |
-| Pochette (URL) | `trackRoles.icon` |
+| Pochette (URL) | `trackRoles.icon` (variantes en `trackRoles.images.images[]`) |
 | En lecture ? | `state == "playing"` |
+
+> ⚠️ **Pochette en HTTP → bascule en HTTPS.** L'`icon` pointe souvent vers le CDN du service
+> en **`http://` clair** (p.ex. `http://resources.tidal.com/...`). App Transport Security
+> bloque le HTTP en clair vers Internet, donc l'image **ne se charge pas** telle quelle dans
+> l'app (alors que `NSAllowsLocalNetworking` autorise le HTTP vers l'enceinte). KefBar relève
+> le schéma en `https://` pour les hôtes **publics** (ces CDN servent aussi en HTTPS) et laisse
+> en HTTP les pochettes servies par l'enceinte (IP locale / AirPlay). Cf.
+> [`KefClient.artworkURL(from:)`](../Sources/KefBar/KefClient.swift).
 
 Position / durée : `player:player/data/playTime` renvoie un `i64_` en **millisecondes** ;
 un champ de durée accompagne la métadonnée. **KefBar** lit la position via
