@@ -80,7 +80,10 @@ final class AppState: ObservableObject {
 
     /// Apparence du label dans la barre de menus (icône / texte / les deux), persistée.
     @Published var menuBarStyle: MenuBarStyle {
-        didSet { UserDefaults.standard.set(menuBarStyle.rawValue, forKey: Self.menuBarStyleKey) }
+        didSet {
+            UserDefaults.standard.set(menuBarStyle.rawValue, forKey: Self.menuBarStyleKey)
+            updateLiveTracking()
+        }
     }
 
     /// Texte personnalisé affiché dans la barre de menus (vide ⇒ repli sur l'icône), persisté.
@@ -90,21 +93,46 @@ final class AppState: ObservableObject {
 
     /// Source du texte de la barre de menus (libellé fixe ou morceau en cours), persistée.
     @Published var menuBarTextSource: MenuBarTextSource {
-        didSet { UserDefaults.standard.set(menuBarTextSource.rawValue, forKey: Self.menuBarTextSourceKey) }
+        didSet {
+            UserDefaults.standard.set(menuBarTextSource.rawValue, forKey: Self.menuBarTextSourceKey)
+            updateLiveTracking()
+        }
     }
 
     /// Texte effectivement affiché dans la barre de menus selon la source choisie. Vide ⇒
     /// le label retombe sur l'icône seule (rien à afficher : texte vide ou aucune lecture).
+    /// En mode « morceau en cours » : `Titre — Artiste · position / durée`.
     var menuBarResolvedText: String {
         switch menuBarTextSource {
         case .custom:
             return menuBarText.trimmingCharacters(in: .whitespaces)
         case .nowPlaying:
-            guard isOn, let title = nowPlaying?.title?.trimmingCharacters(in: .whitespaces),
-                  !title.isEmpty else { return "" }
-            // Borne la longueur pour ne pas pousser les autres menus hors de l'écran.
-            return title.count > 40 ? title.prefix(39) + "…" : title
+            guard isOn, let np = nowPlaying else { return "" }
+            let title = np.title?.trimmingCharacters(in: .whitespaces) ?? ""
+            guard !title.isEmpty else { return "" }
+            let artist = np.artist?.trimmingCharacters(in: .whitespaces) ?? ""
+            var label = artist.isEmpty ? title : "\(title) — \(artist)"
+            // Borne titre+artiste pour ne pas pousser les autres menus hors de l'écran.
+            if label.count > 30 { label = label.prefix(29) + "…" }
+            // Timecode : position lue, et durée totale si l'enceinte la communique.
+            let position = Self.timeLabel(positionMs)
+            if let dur = np.durationMs, dur > 0 {
+                return "\(label) · \(position) / \(Self.timeLabel(dur))"
+            }
+            return "\(label) · \(position)"
         }
+    }
+
+    /// Formate un nombre de millisecondes en `m:ss`.
+    private static func timeLabel(_ ms: Int) -> String {
+        let seconds = max(0, ms / 1000)
+        return String(format: "%d:%02d", seconds / 60, seconds % 60)
+    }
+
+    /// `true` quand la barre de menus affiche le morceau en cours : le suivi temps réel
+    /// (flux d'évènements + compteur de position) doit alors tourner **même popover fermé**.
+    private var menuBarNeedsNowPlaying: Bool {
+        menuBarStyle.showsText && menuBarTextSource == .nowPlaying
     }
 
     var isMuted: Bool { volume == 0 }
@@ -162,6 +190,10 @@ final class AppState: ObservableObject {
         nowPlayingCenter.onPlayPause = { [weak self] in self?.playPause() }
         nowPlayingCenter.onNext = { [weak self] in self?.next() }
         nowPlayingCenter.onPrevious = { [weak self] in self?.previous() }
+
+        // Si la barre de menus affiche le morceau en cours, le suivi temps réel démarre
+        // dès le lancement (sans attendre l'ouverture du popover).
+        updateLiveTracking()
     }
 
     // MARK: - Rafraîchissement
@@ -206,6 +238,37 @@ final class AppState: ObservableObject {
         } catch {
             isReachable = false
             report(error)
+        }
+    }
+
+    // MARK: - Cycle de vie du suivi temps réel (popover + barre de menus)
+
+    /// Le popover est-il affiché ? Le suivi temps réel tourne tant qu'il l'est — et aussi,
+    /// popover fermé, quand la barre de menus a besoin du morceau en cours.
+    private var popoverVisible = false
+
+    /// Appelé à l'ouverture du popover.
+    func popoverAppeared() {
+        popoverVisible = true
+        updateLiveTracking()
+    }
+
+    /// Appelé à la fermeture du popover.
+    func popoverDisappeared() {
+        popoverVisible = false
+        updateLiveTracking()
+    }
+
+    /// Démarre ou arrête le suivi temps réel (flux d'évènements + compteur de position) selon
+    /// qu'il est nécessaire : popover ouvert, **ou** barre de menus en mode « morceau en cours »
+    /// (qui doit rester à jour même popover fermé). Idempotent : ne relance pas ce qui tourne déjà.
+    private func updateLiveTracking() {
+        if popoverVisible || menuBarNeedsNowPlaying {
+            if eventTask == nil { startEventStream() }
+            if positionTask == nil { startPositionTicker() }
+        } else {
+            stopEventStream()
+            stopPositionTicker()
         }
     }
 

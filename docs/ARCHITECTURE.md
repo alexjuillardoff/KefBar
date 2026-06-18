@@ -375,7 +375,13 @@ label: { menuBarLabel }   // icône / texte / les deux, selon les réglages
   `menuBarTextSource` (`MenuBarTextSource` : `.custom` libellé fixe / `.nowPlaying` morceau en
   cours) et `menuBarText` (texte libre) sont persistés dans UserDefaults et réglés dans les
   Paramètres. L'icône reflète l'état d'alimentation ; `menuBarResolvedText` calcule le texte à
-  afficher (titre en cours borné à 40 caractères) — un texte vide retombe sur l'icône.
+  afficher — en mode morceau : `Titre — Artiste · position / durée` (titre+artiste borné à
+  30 caractères). Un texte vide retombe sur l'icône.
+- **Suivi popover fermé** : normalement le flux d'évènements et le compteur de position ne
+  tournent que pendant que le popover est ouvert (`popoverAppeared`/`popoverDisappeared` →
+  `updateLiveTracking`). En mode barre de menus « morceau en cours », `menuBarNeedsNowPlaying`
+  les maintient actifs **même popover fermé** pour que titre/artiste/timecode restent à jour ;
+  `updateLiveTracking` est idempotent (ne relance pas ce qui tourne déjà).
 
 ## 8. Bundle `.app`, ATS & signature (pièges)
 

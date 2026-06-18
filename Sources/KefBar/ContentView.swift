@@ -30,14 +30,12 @@ struct ContentView: View {
         .padding(Self.contentPadding)
         .frame(width: Self.popoverWidth)
         .task {
+            state.popoverAppeared()
             await state.refresh()
-            state.startEventStream()
-            state.startPositionTicker()
             await state.refreshNotifications()
         }
         .onDisappear {
-            state.stopEventStream()
-            state.stopPositionTicker()
+            state.popoverDisappeared()
         }
         .onChange(of: showAdvanced) { open in
             // Charge file d'attente + notifications (best-effort) à l'ouverture du panneau.
