@@ -122,6 +122,12 @@ Cliquez sur l'icône 🔊 pour :
 - ⏯️ **lecture / pause**, piste **suivante / précédente** ;
 - 🎵 voir le **titre, l'artiste et la pochette** en cours.
 
+> ⌨️ **Touches média du clavier** : quand une musique joue sur l'enceinte, les touches
+> **lecture/pause**, **⏮** et **⏭** de votre clavier Mac la pilotent directement — sans même
+> ouvrir le menu. La lecture en cours apparaît aussi dans le **Centre de contrôle** de macOS.
+> (Si vous écoutez plutôt de la musique depuis une autre app, comme Musique ou Spotify, ces
+> touches repassent automatiquement sous le contrôle de cette app.)
+
 ### Lancer KefBar automatiquement au démarrage
 
 Réglages système → **Général** → **Ouverture** → **Ouvrir à la connexion** →

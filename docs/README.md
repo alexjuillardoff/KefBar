@@ -38,7 +38,8 @@ enceintes KEF de **2ᵉ génération** (LSX II, LS50 Wireless II, LS60, XIO) via
 HTTP/JSON locale.
 
 Fonctions : volume + mute, marche/arrêt (veille), sélection de source, transport
-(play/pause, suivant/précédent), affichage de la lecture en cours (titre/artiste/pochette),
+(play/pause, suivant/précédent), pilotage par les **touches média du clavier** (+ intégration
+« En cours de lecture » macOS), affichage de la lecture en cours (titre/artiste/pochette),
 rafraîchissement automatique.
 
 ```
@@ -49,6 +50,7 @@ KefBar/
 │   ├── KefBarApp.swift        # point d'entrée : MenuBarExtra + app accessoire
 │   ├── ContentView.swift      # UI du menu (slider, transport, sources, power)
 │   ├── AppState.swift         # état observable + actions + polling
+│   ├── NowPlayingCenter.swift # touches média clavier + « En cours de lecture » macOS
 │   ├── KefClient.swift        # couche réseau : LE protocole KEF
 │   └── Models.swift           # Source, NowPlaying, erreurs
 ├── Resources/Info.plist       # bundle : Dock masqué + exception réseau local

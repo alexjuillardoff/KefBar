@@ -46,6 +46,9 @@ final class AppState: ObservableObject {
     private var pollTask: Task<Void, Never>?
     private var volumeSendTask: Task<Void, Never>?
 
+    /// Touches média du clavier + intégration « En cours de lecture » de macOS.
+    private let nowPlayingCenter = NowPlayingCenter()
+
     init() {
         let savedHost = UserDefaults.standard.string(forKey: Self.hostKey) ?? ""
         host = savedHost
@@ -59,12 +62,21 @@ final class AppState: ObservableObject {
         savedSpeakers = speakers
 
         client = savedHost.isEmpty ? nil : KefClient(host: savedHost)
+
+        // Les touches média physiques pilotent l'enceinte active.
+        nowPlayingCenter.onPlayPause = { [weak self] in self?.playPause() }
+        nowPlayingCenter.onNext = { [weak self] in self?.next() }
+        nowPlayingCenter.onPrevious = { [weak self] in self?.previous() }
     }
 
     // MARK: - Rafraîchissement
 
     func refresh() async {
-        guard let client else { isReachable = false; return }
+        guard let client else {
+            isReachable = false
+            nowPlayingCenter.update(nowPlaying: nil, isOn: false)
+            return
+        }
         do {
             let on = try await client.isPoweredOn()
             let vol = try await client.volume()
@@ -83,6 +95,7 @@ final class AppState: ObservableObject {
             }
             isReachable = true
             lastError = nil
+            nowPlayingCenter.update(nowPlaying: np, isOn: on)
         } catch {
             isReachable = false
             report(error)

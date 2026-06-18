@@ -38,6 +38,7 @@ keyboard — using the same undocumented local API that the KEF Connect app uses
 - ⏻ **Power on / standby**
 - 🎛️ **Source selector** — Wi-Fi, Bluetooth, TV/HDMI, Optical, Coaxial, Aux
 - ⏯️ **Transport** — play / pause, next / previous track
+- ⌨️ **Media keys** — the Mac's physical play/pause, ⏮/⏭ keys control the speaker; playback also shows up in Control Center
 - 🎵 **Now playing** — title, artist and album artwork
 - 🔄 **Auto-refresh** every 3 seconds
 - 🪶 **No Dock icon** — lives quietly in the menu bar (accessory app)
@@ -102,6 +103,7 @@ sur votre réseau local.
 - Marche / arrêt (veille)
 - Sélection de source : Wi-Fi, Bluetooth, TV/HDMI, Optique, Coaxial, Aux
 - Lecture / pause, piste suivante / précédente
+- ⌨️ **Touches média du clavier** : les touches lecture/pause, ⏮/⏭ du Mac pilotent l'enceinte ; la lecture apparaît aussi dans le Centre de contrôle
 - Titre, artiste et pochette en cours de lecture
 - Rafraîchissement périodique (3 s)
 - Pas d'icône dans le Dock (app accessoire)
@@ -159,6 +161,7 @@ Ajoute-les toutes et choisis l'active depuis le titre dans la barre de menus.
 | `KefClient.swift` | Couche réseau : implémente le protocole HTTP/JSON KEF (getData/setData) |
 | `Discovery.swift` | Scan du réseau local pour découvrir les enceintes KEF (sondes HTTP concurrentes) |
 | `AppState.swift`  | État observable + actions + polling + liste d'enceintes & scan |
+| `NowPlayingCenter.swift` | Touches média du clavier (framework MediaPlayer) + intégration « En cours de lecture » macOS |
 | `Models.swift`    | `Source`, `Speaker`, `NowPlaying`, erreurs |
 | `ContentView.swift` | UI du menu (gestion des enceintes, slider, transport, sources, power) |
 | `KefBarApp.swift` | Point d'entrée `MenuBarExtra` + politique d'activation accessoire |

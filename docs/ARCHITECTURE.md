@@ -20,19 +20,23 @@ Quatre couches + un module transverse :
 │  KefClient        protocole HTTP/JSON KEF      │  struct sans état, async/await
 └─────────────────────────────────────────────┘
         Models  (Source, NowPlaying, KefError)  ← utilisé par toutes les couches
+   NowPlayingCenter (touches média + Now Playing macOS)  ← détenu par AppState
 ```
 
 Graphe de dépendances (qui connaît qui) :
 
 ```
 KefBarApp ──▶ ContentView ──▶ AppState ──▶ KefClient ──▶ URLSession
-                  │                │            │
+                  │                │  │         │
+                  │                │  └──▶ NowPlayingCenter ──▶ MediaPlayer (système)
                   └────────────────┴────────────┴──▶ Models
 ```
 
 Règle : **les dépendances ne pointent que vers le bas**. `KefClient` ignore l'existence de
 `AppState` et de l'UI ; `AppState` ignore SwiftUI (il n'importe `SwiftUI` que pour
-`ObservableObject`/`@Published`).
+`ObservableObject`/`@Published`). `NowPlayingCenter` ignore lui aussi l'UI et le réseau : il
+ne connaît que `NowPlaying` (Models) et le framework MediaPlayer, et `AppState` lui branche
+des callbacks (touches → actions).
 
 ## 2. Fichiers & responsabilités
 
@@ -40,7 +44,8 @@ Règle : **les dépendances ne pointent que vers le bas**. `KefClient` ignore l'
 |---|---|
 | [`KefClient.swift`](../Sources/KefBar/KefClient.swift) | Couche réseau pure. `getData`/`setData` bas niveau + méthodes haut niveau (timeout configurable, `macAddress()`, sonde `identify()`). Aucune dépendance UI. |
 | [`Discovery.swift`](../Sources/KefBar/Discovery.swift) | Scan actif du sous-réseau local (`getifaddrs` + sondes `KefClient.identify()` concurrentes) pour découvrir les enceintes KEF. Pur, sans dépendance UI. |
-| [`AppState.swift`](../Sources/KefBar/AppState.swift) | `@MainActor ObservableObject` : état `@Published`, orchestration async, polling, debounce, **liste d'enceintes** + scan, persistance (IP active + enceintes). |
+| [`AppState.swift`](../Sources/KefBar/AppState.swift) | `@MainActor ObservableObject` : état `@Published`, orchestration async, polling, debounce, **liste d'enceintes** + scan, persistance (IP active + enceintes). Détient le `NowPlayingCenter`. |
+| [`NowPlayingCenter.swift`](../Sources/KefBar/NowPlayingCenter.swift) | `@MainActor`. Pont vers **MediaPlayer** : reçoit les **touches média** physiques (`MPRemoteCommandCenter`) et publie la lecture en cours (`MPNowPlayingInfoCenter`) — ce qui fait de l'app l'application « En cours de lecture » du système, condition pour recevoir ces touches. Aucune dépendance UI/réseau. |
 | [`Models.swift`](../Sources/KefBar/Models.swift) | `Source` (enum + libellés FR + SF Symbols), `Speaker` (enceinte connue, identité par MAC), `NowPlaying`, `KefError`. |
 | [`ContentView.swift`](../Sources/KefBar/ContentView.swift) | UI déclarative : en-tête/statut, réglages IP, now-playing, transport, slider, picker, footer. |
 | [`KefBarApp.swift`](../Sources/KefBar/KefBarApp.swift) | `@main`, `MenuBarExtra(.window)`, `AppDelegate → setActivationPolicy(.accessory)`. |
@@ -88,6 +93,16 @@ Règle : **les dépendances ne pointent que vers le bas**. `KefClient` ignore l'
 Actions : `refresh()`, `startPolling(every:)`, `stopPolling()`, `setVolume(_:)`,
 `toggleMute()`, `togglePower()`, `select(_:)`, `playPause()`, `next()`, `previous()`.
 
+### `NowPlayingCenter` (@MainActor, détenu par `AppState`)
+
+| Membre | Type | Rôle |
+|---|---|---|
+| `onPlayPause` / `onNext` / `onPrevious` | `(() -> Void)?` | callbacks branchés dans `AppState.init` sur `playPause()`/`next()`/`previous()`. |
+| `update(nowPlaying:isOn:)` | `func` | appelé à chaque `refresh()` ; publie l'état dans `MPNowPlayingInfoCenter` (idempotent ; ne recharge la pochette que si l'URL change), ou **relâche** le statut « En cours de lecture » si l'enceinte est éteinte/inactive. |
+
+État privé : `commandCenter` (`MPRemoteCommandCenter.shared()`), `infoCenter`
+(`MPNowPlayingInfoCenter.default()`), `publishedArtworkURL`, `artworkTask`.
+
 ## 4. Modèle de concurrence
 
 | Élément | Choix | Conséquence |
@@ -113,6 +128,8 @@ refresh()
  └─▶ deviceName()     GET settings:/deviceName (try? — optionnel)
         ▼
    met à jour les @Published ⇒ SwiftUI redessine
+        ▼
+   nowPlayingCenter.update(nowPlaying:isOn:) ⇒ Now Playing macOS + touches média
 ```
 
 Règles de mise à jour notables :
@@ -181,6 +198,42 @@ restauration), indépendant du firmware (cf. [PROTOCOL A.6](PROTOCOL.md#a6-mute-
 
 > Conséquence : l'état n'est rafraîchi **que menu ouvert**. Pour que l'icône reflète l'état
 > menu fermé, il faudrait un polling permanent (léger) — voir §9.
+
+### Touches média du clavier & « En cours de lecture » ([`NowPlayingCenter.swift`](../Sources/KefBar/NowPlayingCenter.swift))
+
+Faire réagir les touches média physiques (lecture/pause, ⏮, ⏭) **sans permission
+d'accessibilité** passe par le framework **MediaPlayer** plutôt que par une capture
+bas niveau du clavier (`NSEvent`/`CGEventTap`, qui exigeraient l'autorisation Accessibilité
+et captureraient les touches des autres apps) :
+
+1. `MPRemoteCommandCenter.shared()` : on s'abonne aux commandes `togglePlayPause`, `play`,
+   `pause`, `nextTrack`, `previousTrack`. Les handlers re-sautent sur le main actor
+   (`Task { @MainActor in … }`) et appellent les callbacks branchés par `AppState`. Les
+   commandes inutiles (seek/skip/position) sont **désactivées**.
+2. `MPNowPlayingInfoCenter.default()` : `update(nowPlaying:isOn:)` y publie titre/artiste/
+   album + pochette et fixe `playbackState` (`.playing`/`.paused`). **C'est cette publication
+   qui fait de KefBar l'application « En cours de lecture » du système** — condition pour que
+   macOS lui route les touches média.
+
+```
+enceinte joue  ──refresh──▶ update(np, isOn:true)  ──▶ playbackState=.playing/.paused
+                                                        + nowPlayingInfo (titre/pochette)
+                                                        ⇒ KefBar devient « Now Playing »
+                                                        ⇒ touches média ⇒ onPlayPause/Next/Prev
+
+enceinte off / rien   ─────▶ update(nil, …)  ──▶ playbackState=.stopped, info vidée
+                                                 ⇒ KefBar relâche le statut
+                                                 ⇒ Musique/Spotify récupèrent les touches
+```
+
+Détails :
+- **Relâchement volontaire.** Tant que l'enceinte n'est pas l'élément actif (éteinte, ou sans
+  lecture), on rend les touches aux autres apps. Une seule app système peut posséder les
+  touches média à la fois.
+- **Pochette en best-effort.** Téléchargée en tâche annulable, rechargée **seulement** quand
+  l'URL change (`publishedArtworkURL`) — sinon le sondage 3 s la rechargerait sans cesse.
+- **Bundle obligatoire.** L'intégration MediaPlayer exige un `CFBundleIdentifier` : elle ne
+  fonctionne **que** depuis `KefBar.app`, pas en `swift run` (cf. §8).
 
 ### Gestion d'erreur
 
@@ -267,6 +320,9 @@ L'app **compile et se package** mais n'a **pas été testée sur enceinte physiq
 2. **Allumage** : KefBar écrit une source réelle (`wifi`) ; à confirmer selon modèle/firmware
    (variante `powerOn` possible — cf. [PROTOCOL A.4](PROTOCOL.md#a4-alimentation-et-source--un-seul-chemin)).
 3. **HTTP/ATS** : si échec en `swift run`, passer par le bundle `.app`.
+4. **Touches média** : le routage par macOS suppose que l'enceinte renvoie un now-playing
+   exploitable (sources Wi-Fi/streaming). Sur une source sans métadonnées (TV, optique…), il
+   n'y a pas de « piste » et KefBar relâche logiquement les touches. À confirmer sur matériel.
 
 Détail complet et confiance par point : [VERIFICATION.md](VERIFICATION.md#3-ce-qui-na-pas-été-testé--à-valider-sur-matériel).
 
@@ -278,7 +334,8 @@ Détail complet et confiance par point : [VERIFICATION.md](VERIFICATION.md#3-ce-
 | **Push temps réel** | Remplacer le polling par `modifyQueue`/`pollQueue` ([PROTOCOL A.8](PROTOCOL.md#a8-push-temps-réel-long-poll--non-implémenté-dans-kefbar)) ; nouvelle méthode `KefClient.poll(...)`. |
 | ~~**Multi-enceintes**~~ ✅ | Fait — `AppState.savedSpeakers: [Speaker]` + IP active, sélecteur dans l'en-tête. |
 | ~~**Découverte auto**~~ ✅ | Fait — [`Discovery.swift`](../Sources/KefBar/Discovery.swift) scanne le LAN via sondes HTTP (plus fiable que Bonjour : ne remonte **que** des KEF). |
-| **Raccourcis clavier globaux** | volume/lecture sans ouvrir le menu. |
+| ~~**Touches média (lecture)**~~ ✅ | Fait — [`NowPlayingCenter.swift`](../Sources/KefBar/NowPlayingCenter.swift) : play/pause, ⏮, ⏭ via le clavier (framework MediaPlayer, sans permission). |
+| **Raccourcis clavier — volume** | monter/baisser le volume au clavier sans ouvrir le menu (les touches volume restent gérées par le Mac, pas l'enceinte). |
 | **DSP/EQ** | exposer les réglages avancés sur les modèles compatibles. |
 | **Polling permanent léger** | démarrer un poll lent au lancement pour que l'icône reflète l'état menu fermé. |
 
