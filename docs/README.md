@@ -15,6 +15,7 @@ et **comment tout fonctionne** (de l'octet réseau jusqu'au SwiftUI).
 | [PROTOCOL.md](PROTOCOL.md) | **Référence exhaustive du protocole** : l'API locale HTTP/JSON (gén. 2) et le protocole binaire TCP (gén. 1), endpoint par endpoint, réponses JSON complètes, séquences d'octets, exemples `curl` et Swift. |
 | [VERIFICATION.md](VERIFICATION.md) | **Traçabilité & preuves** : d'où vient chaque détail du protocole (fichier + ligne + extrait de code), niveaux de confiance, et ce qui n'a pas été testé. |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | **Comment l'app fonctionne** : couches, signatures exactes, modèle de concurrence, séquencement, mécanismes (debounce, machine d'état), pièges, et points d'extension. |
+| [DISTRIBUTION.md](DISTRIBUTION.md) | **Signer & notariser** : setup du certificat Developer ID, profil notarytool, et build notarisé pour distribuer un `.app` qui s'ouvre sans avertissement Gatekeeper. |
 
 Pour l'installation et l'usage, voir le [README principal](../README.md).
 

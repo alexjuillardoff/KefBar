@@ -77,12 +77,13 @@ keyboard — using the same undocumented local API that the KEF Connect app uses
 
 1. Download **[`KefBar.zip`](https://github.com/alexjuillardoff/KefBar/releases/latest/download/KefBar.zip)** from the [latest release](https://github.com/alexjuillardoff/KefBar/releases/latest).
 2. Double-click the zip to extract **KefBar.app**, then drag it into your **Applications** folder.
-3. The app is *ad-hoc signed* (not notarized), so on first launch macOS shows a warning.
-   **Right-click** the app → **Open** → **Open** to allow it (only needed once).
-   If macOS still blocks it, run once in Terminal:
+3. The app isn't notarized yet, so on first launch macOS warns that it "cannot verify
+   KefBar is free of malware". To allow it (once), run in Terminal:
    ```bash
    xattr -dr com.apple.quarantine /Applications/KefBar.app
    ```
+   Or open **System Settings → Privacy & Security**, scroll to the "KefBar was blocked…"
+   message and click **Open Anyway**.
 
 > 🧩 The release is a **universal binary** — runs natively on both Apple Silicon and Intel Macs.
 
@@ -164,12 +165,14 @@ sur votre réseau local.
 
 1. Téléchargez **[`KefBar.zip`](https://github.com/alexjuillardoff/KefBar/releases/latest/download/KefBar.zip)** depuis la [dernière release](https://github.com/alexjuillardoff/KefBar/releases/latest).
 2. Double-cliquez le zip pour obtenir **KefBar.app**, puis glissez-le dans votre dossier **Applications**.
-3. L'app est *signée ad-hoc* (non notarisée) : au premier lancement, macOS affiche un avertissement.
-   Faites **clic droit** sur l'app → **Ouvrir** → **Ouvrir** pour l'autoriser (une seule fois).
-   Si macOS bloque encore, lancez une fois dans le Terminal :
+3. L'app n'est pas encore notarisée : au premier lancement, macOS affiche « Apple n'a pas pu
+   confirmer que KefBar ne contenait pas de logiciel malveillant ». Pour l'autoriser (une fois),
+   lancez dans le Terminal :
    ```bash
    xattr -dr com.apple.quarantine /Applications/KefBar.app
    ```
+   Ou ouvrez **Réglages Système → Confidentialité et sécurité**, descendez jusqu'au message
+   « KefBar a été bloqué… » et cliquez sur **Ouvrir quand même**.
 
 > 🧩 La release est un **binaire universel** — fonctionne nativement sur Mac Apple Silicon *et* Intel.
 
