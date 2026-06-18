@@ -17,11 +17,12 @@ struct KefBarApp: App {
 
     /// Label de la barre de menus, personnalisable dans les réglages : icône seule, texte seul,
     /// ou les deux. L'icône reflète l'état d'alimentation ; le texte est soit un libellé fixe,
-    /// soit le morceau en cours (cf. `menuBarResolvedText`). Un texte vide retombe sur l'icône.
+    /// soit le morceau en cours, et **défile en continu** quand il dépasse `menuBarMaxChars`
+    /// (cf. `MenuBarTitle`). Un texte vide retombe sur l'icône.
     @ViewBuilder
     private var menuBarLabel: some View {
         let icon = state.isOn ? "hifispeaker.fill" : "hifispeaker"
-        let text = state.menuBarResolvedText
+        let text = state.menuBarFullText
         switch state.menuBarStyle {
         case .icon:
             Image(systemName: icon)
@@ -29,7 +30,7 @@ struct KefBarApp: App {
             if text.isEmpty {
                 Image(systemName: icon)
             } else {
-                Text(text)
+                MenuBarTitle(text: text, offset: state.menuBarScrollOffset)
             }
         case .both:
             if text.isEmpty {
@@ -37,7 +38,7 @@ struct KefBarApp: App {
             } else {
                 HStack(spacing: 6) {
                     Image(systemName: icon)
-                    Text(text)
+                    MenuBarTitle(text: text, offset: state.menuBarScrollOffset)
                 }
             }
         }

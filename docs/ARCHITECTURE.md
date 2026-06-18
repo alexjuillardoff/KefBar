@@ -374,14 +374,20 @@ label: { menuBarLabel }   // icône / texte / les deux, selon les réglages
 - **Label personnalisable** : `menuBarStyle` (`MenuBarStyle` : `.icon` / `.text` / `.both`),
   `menuBarTextSource` (`MenuBarTextSource` : `.custom` libellé fixe / `.nowPlaying` morceau en
   cours) et `menuBarText` (texte libre) sont persistés dans UserDefaults et réglés dans les
-  Paramètres. L'icône reflète l'état d'alimentation ; `menuBarResolvedText` calcule le texte à
-  afficher — en mode morceau : `Titre — Artiste · position / durée` (titre+artiste borné à
-  30 caractères). Un texte vide retombe sur l'icône.
+  Paramètres. L'icône reflète l'état d'alimentation ; `menuBarFullText` compose le texte complet
+  — en mode morceau : `Titre — Artiste · position / durée`. Un texte vide retombe sur l'icône.
+- **Défilement (marquee) fluide** : sous `menuBarMaxChars` (28) le texte est affiché tel quel ;
+  au-delà, la vue `MenuBarTitle` le fait **glisser pixel par pixel** dans une fenêtre clippée de
+  largeur fixe (deux copies espacées d'un écart, bouclage sans couture). Le label est rendu en
+  **chasse fixe** : la largeur du caractère est donc connue (mesurée via `NSFont`), ce qui rend
+  le clip et la boucle exacts. `menuBarScrollTask` avance `menuBarScrollOffset` en **points**
+  (~30 pts/s à ~30 fps, purement local) ; la vue reboucle l'offset par modulo.
 - **Suivi popover fermé** : normalement le flux d'évènements et le compteur de position ne
   tournent que pendant que le popover est ouvert (`popoverAppeared`/`popoverDisappeared` →
   `updateLiveTracking`). En mode barre de menus « morceau en cours », `menuBarNeedsNowPlaying`
-  les maintient actifs **même popover fermé** pour que titre/artiste/timecode restent à jour ;
-  `updateLiveTracking` est idempotent (ne relance pas ce qui tourne déjà).
+  les maintient actifs **même popover fermé** pour que titre/artiste/timecode restent à jour.
+  `updateLiveTracking` pilote aussi `menuBarScrollTask` (dès qu'un texte est affiché) et reste
+  idempotent (ne relance pas ce qui tourne déjà).
 
 ## 8. Bundle `.app`, ATS & signature (pièges)
 

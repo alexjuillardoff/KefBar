@@ -477,6 +477,47 @@ struct ContentView: View {
     }
 }
 
+// MARK: - Titre défilant de la barre de menus
+
+/// Texte du label de la barre de menus, en **chasse fixe**, qui défile **en continu** (pixel
+/// par pixel) quand il dépasse `AppState.menuBarMaxChars`. La chasse fixe rend la largeur du
+/// caractère connue : la fenêtre de clip et la boucle sont donc calculées exactement, et deux
+/// copies espacées d'un écart assurent un défilement sans couture. En deçà de la largeur, le
+/// texte est affiché tel quel, sans défilement.
+struct MenuBarTitle: View {
+    let text: String
+    /// Décalage du défilement en points (croissant), fourni par `AppState.menuBarScrollOffset`.
+    let offset: Double
+
+    /// Police du label : doit correspondre à la mesure `charWidth` ci-dessous.
+    private static let font: Font = .system(.body, design: .monospaced)
+    /// Largeur d'un caractère de la police à chasse fixe (mesurée une fois).
+    private static let charWidth: CGFloat = {
+        let nsFont = NSFont.monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+        return ("0" as NSString).size(withAttributes: [.font: nsFont]).width
+    }()
+    /// Écart (en caractères) entre la fin du texte et son recommencement.
+    private static let gapChars = 4
+
+    var body: some View {
+        if text.count <= AppState.menuBarMaxChars {
+            Text(text).font(Self.font)
+        } else {
+            let piece = text + String(repeating: " ", count: Self.gapChars)
+            let loopWidth = CGFloat(piece.count) * Self.charWidth
+            let windowWidth = CGFloat(AppState.menuBarMaxChars) * Self.charWidth
+            let x = CGFloat(offset).truncatingRemainder(dividingBy: loopWidth)
+            HStack(spacing: 0) {
+                Text(piece).font(Self.font).fixedSize()
+                Text(piece).font(Self.font).fixedSize()
+            }
+            .offset(x: -x)
+            .frame(width: windowWidth, alignment: .leading)
+            .clipped()
+        }
+    }
+}
+
 // MARK: - Texte défilant (marquee)
 
 /// Texte sur une seule ligne qui **défile** horizontalement quand il dépasse la largeur

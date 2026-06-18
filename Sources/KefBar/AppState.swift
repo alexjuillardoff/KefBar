@@ -99,10 +99,17 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// Texte effectivement affiché dans la barre de menus selon la source choisie. Vide ⇒
-    /// le label retombe sur l'icône seule (rien à afficher : texte vide ou aucune lecture).
-    /// En mode « morceau en cours » : `Titre — Artiste · position / durée`.
-    var menuBarResolvedText: String {
+    /// Largeur (en caractères) de la fenêtre affichée dans la barre de menus : au-delà, le
+    /// texte **défile** au lieu d'être tronqué.
+    static let menuBarMaxChars = 28
+
+    /// Décalage courant du défilement, **en points** (avancé en continu par `menuBarScrollTask`,
+    /// rebouclé côté vue). Permet un glissement pixel par pixel, pas caractère par caractère.
+    @Published private(set) var menuBarScrollOffset: Double = 0
+
+    /// Texte **complet** (non tronqué) selon la source choisie. Vide ⇒ le label retombe sur
+    /// l'icône seule. En mode « morceau en cours » : `Titre — Artiste · position / durée`.
+    var menuBarFullText: String {
         switch menuBarTextSource {
         case .custom:
             return menuBarText.trimmingCharacters(in: .whitespaces)
@@ -111,9 +118,7 @@ final class AppState: ObservableObject {
             let title = np.title?.trimmingCharacters(in: .whitespaces) ?? ""
             guard !title.isEmpty else { return "" }
             let artist = np.artist?.trimmingCharacters(in: .whitespaces) ?? ""
-            var label = artist.isEmpty ? title : "\(title) — \(artist)"
-            // Borne titre+artiste pour ne pas pousser les autres menus hors de l'écran.
-            if label.count > 30 { label = label.prefix(29) + "…" }
+            let label = artist.isEmpty ? title : "\(title) — \(artist)"
             // Timecode : position lue, et durée totale si l'enceinte la communique.
             let position = Self.timeLabel(positionMs)
             if let dur = np.durationMs, dur > 0 {
@@ -122,6 +127,9 @@ final class AppState: ObservableObject {
             return "\(label) · \(position)"
         }
     }
+
+    /// `true` quand le texte courant dépasse la fenêtre et doit donc défiler.
+    var menuBarTextScrolls: Bool { menuBarFullText.count > Self.menuBarMaxChars }
 
     /// Formate un nombre de millisecondes en `m:ss`.
     private static func timeLabel(_ ms: Int) -> String {
@@ -152,6 +160,7 @@ final class AppState: ObservableObject {
     private var previousVolume: Int = 20
     private var eventTask: Task<Void, Never>?
     private var positionTask: Task<Void, Never>?
+    private var menuBarScrollTask: Task<Void, Never>?
     private var volumeSendTask: Task<Void, Never>?
     private var coverURLShown: URL?
     private var coverTask: Task<Void, Never>?
@@ -270,6 +279,37 @@ final class AppState: ObservableObject {
             stopEventStream()
             stopPositionTicker()
         }
+        // Défilement du texte (purement local) : actif dès qu'un texte est affiché.
+        if menuBarStyle.showsText {
+            if menuBarScrollTask == nil { startMenuBarScroll() }
+        } else {
+            stopMenuBarScroll()
+        }
+    }
+
+    /// Fait glisser le texte de la barre de menus **en continu** (~30 fps, glissement fluide),
+    /// mais **seulement** quand il dépasse `menuBarMaxChars` ; sinon l'offset reste à zéro.
+    private func startMenuBarScroll() {
+        menuBarScrollTask?.cancel()
+        menuBarScrollTask = Task { [weak self] in
+            // ~30 points/seconde : lisible sans être brusque.
+            let step = 30.0 / 30.0
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 33_000_000) // ~30 fps
+                guard let self, !Task.isCancelled else { return }
+                if self.menuBarTextScrolls {
+                    self.menuBarScrollOffset += step
+                } else if self.menuBarScrollOffset != 0 {
+                    self.menuBarScrollOffset = 0
+                }
+            }
+        }
+    }
+
+    private func stopMenuBarScroll() {
+        menuBarScrollTask?.cancel()
+        menuBarScrollTask = nil
+        menuBarScrollOffset = 0
     }
 
     // MARK: - Flux d'évènements temps réel (long-poll)
