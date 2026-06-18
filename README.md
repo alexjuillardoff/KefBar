@@ -124,6 +124,7 @@ sur votre réseau local.
 - Pochette, puis titre, artiste et album qui **défilent** s'ils sont trop longs (pause au survol), et **barre de progression** (temps écoulé / total) en cours de lecture
 - Mise à jour **temps réel** : abonnement au flux d'évènements de l'enceinte (long-poll), réveil quasi instantané, avec repli sur un sondage périodique
 - 🚀 **Lancement au démarrage** : optionnel, via `SMAppService`
+- 🏷️ **Barre de menus personnalisable** : choisis l'affichage (icône, texte libre, ou les deux) et le texte montré en haut de l'écran, dans les Paramètres
 - Pas d'icône dans le Dock (app accessoire)
 
 > ⚠️ Vérifié sur une LSX II : le **DSP est en lecture seule** — l'enceinte refuse l'écriture sur

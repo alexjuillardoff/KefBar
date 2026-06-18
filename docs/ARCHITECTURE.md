@@ -363,13 +363,16 @@ son IP** (et suit l'enceinte active si c'est elle). À défaut de MAC, l'IP fait
 
 ```swift
 MenuBarExtra { ContentView().environmentObject(state) }
-label: { Image(systemName: state.isOn ? "hifispeaker.fill" : "hifispeaker") }
+label: { menuBarLabel }   // icône / texte / les deux, selon les réglages
 .menuBarExtraStyle(.window)
 ```
 
 - `.window` : indispensable pour héberger le **slider** (le style `.menu` ne gère que des items).
 - `AppDelegate.applicationDidFinishLaunching` → `NSApp.setActivationPolicy(.accessory)` : masque
   le Dock **même hors bundle** (`swift run`).
+- **Label personnalisable** : `menuBarStyle` (`MenuBarStyle` : `.icon` / `.text` / `.both`) et
+  `menuBarText` (texte libre) sont persistés dans UserDefaults et réglés dans les Paramètres.
+  L'icône reflète l'état d'alimentation ; un texte vide retombe sur l'icône.
 
 ## 8. Bundle `.app`, ATS & signature (pièges)
 

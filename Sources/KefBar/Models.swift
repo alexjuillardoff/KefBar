@@ -60,6 +60,30 @@ enum Source: String, CaseIterable, Identifiable, Hashable {
     }
 }
 
+/// Apparence du label affiché dans la barre de menus macOS (icône, texte, ou les deux).
+/// Persisté en `String` (rawValue) dans UserDefaults.
+enum MenuBarStyle: String, CaseIterable, Identifiable {
+    case icon
+    case text
+    case both
+
+    var id: String { rawValue }
+
+    /// Libellé du segment dans les réglages.
+    var label: String {
+        switch self {
+        case .icon: return "Icône"
+        case .text: return "Texte"
+        case .both: return "Icône + texte"
+        }
+    }
+
+    /// `true` si ce style affiche le texte personnalisé (donc le champ de saisie est utile).
+    var showsText: Bool { self != .icon }
+    /// `true` si ce style affiche l'icône.
+    var showsIcon: Bool { self != .text }
+}
+
 /// Une enceinte KEF connue de l'app (découverte ou ajoutée à la main).
 ///
 /// L'identité stable est l'**adresse MAC** quand on la connaît : l'IP peut changer

@@ -78,6 +78,16 @@ final class AppState: ObservableObject {
         didSet { applyLaunchAtLogin(launchAtLogin) }
     }
 
+    /// Apparence du label dans la barre de menus (icône / texte / les deux), persistée.
+    @Published var menuBarStyle: MenuBarStyle {
+        didSet { UserDefaults.standard.set(menuBarStyle.rawValue, forKey: Self.menuBarStyleKey) }
+    }
+
+    /// Texte personnalisé affiché dans la barre de menus (vide ⇒ repli sur l'icône), persisté.
+    @Published var menuBarText: String {
+        didSet { UserDefaults.standard.set(menuBarText, forKey: Self.menuBarTextKey) }
+    }
+
     var isMuted: Bool { volume == 0 }
 
     /// L'enceinte enregistrée correspondant à l'IP active, si elle existe.
@@ -85,6 +95,10 @@ final class AppState: ObservableObject {
 
     private static let hostKey = "kef.host"
     private static let speakersKey = "kef.speakers"
+    private static let menuBarStyleKey = "kef.menuBarStyle"
+    private static let menuBarTextKey = "kef.menuBarText"
+    /// Texte par défaut affiché dans la barre de menus quand l'utilisateur choisit le mode texte.
+    static let defaultMenuBarText = "KEF"
     private var client: KefClient?
     private var lastSource: Source = .wifi
     private var previousVolume: Int = 20
@@ -108,6 +122,9 @@ final class AppState: ObservableObject {
         let savedHost = UserDefaults.standard.string(forKey: Self.hostKey) ?? ""
         host = savedHost
         launchAtLogin = Self.isLaunchAtLoginEnabled()
+        menuBarStyle = UserDefaults.standard.string(forKey: Self.menuBarStyleKey)
+            .flatMap(MenuBarStyle.init(rawValue:)) ?? .icon
+        menuBarText = UserDefaults.standard.string(forKey: Self.menuBarTextKey) ?? Self.defaultMenuBarText
 
         var speakers = Self.loadSpeakers()
         // Migration : un utilisateur d'une version précédente n'a qu'une IP — on la

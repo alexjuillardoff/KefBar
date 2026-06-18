@@ -186,10 +186,42 @@ struct ContentView: View {
             }
             addSpeakerSection
             Divider()
+            menuBarAppearanceSection
+            Divider()
             Toggle("Lancer au démarrage", isOn: $state.launchAtLogin)
                 .toggleStyle(.switch)
                 .controlSize(.small)
                 .font(.caption)
+        }
+    }
+
+    // MARK: Apparence dans la barre de menus
+
+    /// Personnalisation du label affiché en haut de l'écran : icône, texte libre, ou les deux.
+    private var menuBarAppearanceSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Barre de menus")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Picker("Affichage", selection: $state.menuBarStyle) {
+                ForEach(MenuBarStyle.allCases) { style in
+                    Text(style.label).tag(style)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+
+            if state.menuBarStyle.showsText {
+                TextField("Texte (ex. KEF)", text: $state.menuBarText)
+                    .textFieldStyle(.roundedBorder)
+                    .controlSize(.small)
+            }
+
+            Text("Personnalise l'icône et le texte affichés dans la barre de menus, en haut de l'écran.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
