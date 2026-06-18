@@ -13,10 +13,17 @@ import Foundation
 /// pour l'enceinte dans ta box, sinon l'adresse changera.
 struct KefClient {
     let host: String
+    /// Délai max par requête. Court (~1,5 s) pendant un scan réseau, plus long en usage normal.
+    let timeout: TimeInterval
+
+    init(host: String, timeout: TimeInterval = 5) {
+        self.host = host
+        self.timeout = timeout
+    }
 
     private var session: URLSession {
         let cfg = URLSessionConfiguration.ephemeral
-        cfg.timeoutIntervalForRequest = 5
+        cfg.timeoutIntervalForRequest = timeout
         cfg.waitsForConnectivity = false
         return URLSession(configuration: cfg)
     }
@@ -142,5 +149,26 @@ struct KefClient {
     func deviceName() async throws -> String? {
         let obj = try await getData(path: "settings:/deviceName")
         return obj["string_"] as? String
+    }
+
+    /// Adresse MAC de l'enceinte — identité stable même si l'IP change (DHCP).
+    func macAddress() async throws -> String? {
+        let obj = try await getData(path: "settings:/system/primaryMacAddress")
+        return obj["string_"] as? String
+    }
+
+    // MARK: - Découverte
+
+    /// Sonde l'hôte : renvoie un `Speaker` si c'est bien une enceinte KEF gén. 2, sinon `nil`.
+    ///
+    /// Le test discriminant est `speakerStatus`, un chemin **propre à KEF** : un serveur HTTP
+    /// quelconque sur le port 80 renverra autre chose (ou rien de parsable) et `getData`
+    /// lèvera, ce qui nous fait répondre `nil`. Sur un hit confirmé seulement (rare), on va
+    /// chercher le nom et la MAC.
+    func identify() async -> Speaker? {
+        guard (try? await isPoweredOn()) != nil else { return nil }
+        let name = (try? await deviceName()).flatMap { $0 }
+        let mac = (try? await macAddress()).flatMap { $0 }
+        return Speaker(host: host, name: name ?? Speaker.defaultName, mac: mac)
     }
 }

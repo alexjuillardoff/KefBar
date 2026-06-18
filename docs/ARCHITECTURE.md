@@ -38,9 +38,10 @@ Règle : **les dépendances ne pointent que vers le bas**. `KefClient` ignore l'
 
 | Fichier | Responsabilité |
 |---|---|
-| [`KefClient.swift`](../Sources/KefBar/KefClient.swift) | Couche réseau pure. `getData`/`setData` bas niveau + méthodes haut niveau. Aucune dépendance UI. |
-| [`AppState.swift`](../Sources/KefBar/AppState.swift) | `@MainActor ObservableObject` : état `@Published`, orchestration async, polling, debounce, persistance IP. |
-| [`Models.swift`](../Sources/KefBar/Models.swift) | `Source` (enum + libellés FR + SF Symbols), `NowPlaying`, `KefError`. |
+| [`KefClient.swift`](../Sources/KefBar/KefClient.swift) | Couche réseau pure. `getData`/`setData` bas niveau + méthodes haut niveau (timeout configurable, `macAddress()`, sonde `identify()`). Aucune dépendance UI. |
+| [`Discovery.swift`](../Sources/KefBar/Discovery.swift) | Scan actif du sous-réseau local (`getifaddrs` + sondes `KefClient.identify()` concurrentes) pour découvrir les enceintes KEF. Pur, sans dépendance UI. |
+| [`AppState.swift`](../Sources/KefBar/AppState.swift) | `@MainActor ObservableObject` : état `@Published`, orchestration async, polling, debounce, **liste d'enceintes** + scan, persistance (IP active + enceintes). |
+| [`Models.swift`](../Sources/KefBar/Models.swift) | `Source` (enum + libellés FR + SF Symbols), `Speaker` (enceinte connue, identité par MAC), `NowPlaying`, `KefError`. |
 | [`ContentView.swift`](../Sources/KefBar/ContentView.swift) | UI déclarative : en-tête/statut, réglages IP, now-playing, transport, slider, picker, footer. |
 | [`KefBarApp.swift`](../Sources/KefBar/KefBarApp.swift) | `@main`, `MenuBarExtra(.window)`, `AppDelegate → setActivationPolicy(.accessory)`. |
 
@@ -190,8 +191,41 @@ s'affiche en rouge dans le menu.
 
 ### Persistance
 
-Seule l'**IP** est persistée (`UserDefaults`, clé `kef.host`), via le `didSet` de `host`.
-Aucune autre donnée n'est stockée.
+Deux clés `UserDefaults` :
+- `kef.host` — IP de l'enceinte **active** (via le `didSet` de `host`).
+- `kef.speakers` — liste des enceintes connues (`[Speaker]` encodée en JSON), via le `didSet`
+  de `savedSpeakers`.
+
+**Migration** : au démarrage, si `kef.speakers` est vide mais `kef.host` existe (utilisateur
+d'une version antérieure), une `Speaker` est créée à partir de l'IP.
+
+### Découverte réseau (`Discovery.swift`)
+
+Scan **actif** du sous-réseau, pas de Bonjour :
+
+```
+candidateHosts()                       group de tâches (fenêtre glissante, 64 en vol)
+ ├─ getifaddrs() → interfaces en*       ┌─────────────────────────────────────────┐
+ │   privées, actives, non-loopback     │ KefClient(ip, timeout: 1,5 s).identify() │
+ ├─ adresse & masque → plage d'hôtes    │  └─ getData speakerStatus (propre à KEF) │
+ └─ /24 typique = 254 IP (cap 1024)     │     hit ⇒ + deviceName + macAddress      │
+                                        └─────────────────────────────────────────┘
+                                                  ▼  Speaker? (nil si non-KEF)
+                                          tri par IP → AppState.discovered
+```
+
+- **Pourquoi un scan HTTP plutôt que `NWBrowser`/Bonjour ?** Le chemin `speakerStatus` est
+  spécifique à KEF : seules de vraies enceintes répondent. Bonjour (`_airplay._tcp`) remonterait
+  aussi Apple TV, HomePod, Chromecast… L'API étant déjà du HTTP local, aucune permission en plus.
+- **Concurrence** : `withTaskGroup` en fenêtre glissante de 64 sondes (< limite de descripteurs
+  macOS). Un /24 se scanne en quelques secondes ; la progression `0…1` alimente `scanProgress`.
+
+### Multi-enceintes & identité
+
+`AppState.savedSpeakers: [Speaker]` ; l'enceinte active est celle dont `host == kef.host`.
+`Speaker.id = mac ?? host` : la **MAC** sert d'identité stable. Conséquence concrète — si une
+enceinte change d'IP (DHCP), un scan la retrouve par sa MAC et `applyScanResults` **met à jour
+son IP** (et suit l'enceinte active si c'est elle). À défaut de MAC, l'IP fait office d'identité.
 
 ## 7. Entrée & barre de menus
 
@@ -242,8 +276,8 @@ Détail complet et confiance par point : [VERIFICATION.md](VERIFICATION.md#3-ce-
 |---|---|
 | **Lectures parallèles** | Dans `refresh()`, remplacer les 5 `await` séquentiels par `async let` + `await` groupé. |
 | **Push temps réel** | Remplacer le polling par `modifyQueue`/`pollQueue` ([PROTOCOL A.8](PROTOCOL.md#a8-push-temps-réel-long-poll--non-implémenté-dans-kefbar)) ; nouvelle méthode `KefClient.poll(...)`. |
-| **Multi-enceintes** | Généraliser `AppState` (IP unique) en liste + enceinte par défaut (cf. Kefir). |
-| **Découverte auto** | `NWBrowser` sur `_airplay._tcp` / `_googlecast._tcp` pour lister les enceintes. |
+| ~~**Multi-enceintes**~~ ✅ | Fait — `AppState.savedSpeakers: [Speaker]` + IP active, sélecteur dans l'en-tête. |
+| ~~**Découverte auto**~~ ✅ | Fait — [`Discovery.swift`](../Sources/KefBar/Discovery.swift) scanne le LAN via sondes HTTP (plus fiable que Bonjour : ne remonte **que** des KEF). |
 | **Raccourcis clavier globaux** | volume/lecture sans ouvrir le menu. |
 | **DSP/EQ** | exposer les réglages avancés sur les modèles compatibles. |
 | **Polling permanent léger** | démarrer un poll lent au lancement pour que l'icône reflète l'état menu fermé. |

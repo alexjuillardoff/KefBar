@@ -3,12 +3,13 @@ import SwiftUI
 struct ContentView: View {
     @EnvironmentObject var state: AppState
     @State private var showSettings = false
+    @State private var manualIP = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
 
-            if showSettings || state.host.isEmpty {
+            if showSettings || state.savedSpeakers.isEmpty {
                 settingsSection
             }
 
@@ -37,6 +38,14 @@ struct ContentView: View {
             state.startPolling()
         }
         .onDisappear { state.stopPolling() }
+        .onChange(of: state.isScanning) { scanning in
+            // À la fin d'un scan, retient s'il n'a rien trouvé de nouveau (pour le message d'aide).
+            if scanning {
+                triedScanWithNoResult = false
+            } else {
+                triedScanWithNoResult = state.discovered.isEmpty
+            }
+        }
     }
 
     // MARK: - Sections
@@ -45,10 +54,16 @@ struct ContentView: View {
         HStack(spacing: 8) {
             Image(systemName: state.isOn ? "hifispeaker.fill" : "hifispeaker")
                 .foregroundStyle(state.isReachable ? Color.primary : Color.secondary)
-            Text(state.deviceName ?? "Enceintes KEF")
-                .font(.headline)
-                .lineLimit(1)
-            Spacer()
+
+            if state.savedSpeakers.count > 1 {
+                speakerSwitcher
+            } else {
+                Text(headerTitle)
+                    .font(.headline)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 4)
             Circle()
                 .fill(state.isReachable ? Color.green : Color.gray)
                 .frame(width: 8, height: 8)
@@ -57,23 +72,147 @@ struct ContentView: View {
                 Image(systemName: "gearshape")
             }
             .buttonStyle(.borderless)
+            .help("Gérer les enceintes")
         }
     }
 
+    private var headerTitle: String {
+        state.deviceName ?? state.activeSpeaker?.name ?? "Enceintes KEF"
+    }
+
+    /// Menu déroulant pour basculer rapidement entre plusieurs enceintes.
+    private var speakerSwitcher: some View {
+        Menu {
+            ForEach(state.savedSpeakers) { speaker in
+                Button { state.selectHost(speaker.host) } label: {
+                    if speaker.host == state.host {
+                        Label(speaker.name, systemImage: "checkmark")
+                    } else {
+                        Text(speaker.name)
+                    }
+                }
+            }
+        } label: {
+            Text(headerTitle)
+                .font(.headline)
+                .lineLimit(1)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+    }
+
     private var settingsSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Adresse IP de l'enceinte")
+        VStack(alignment: .leading, spacing: 10) {
+            if !state.savedSpeakers.isEmpty {
+                savedSpeakersList
+                Divider()
+            }
+            addSpeakerSection
+        }
+    }
+
+    // MARK: Enceintes enregistrées
+
+    private var savedSpeakersList: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Mes enceintes")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            HStack {
-                TextField("192.168.1.x", text: $state.host)
-                    .textFieldStyle(.roundedBorder)
-                Button("Tester") { Task { await state.refresh() } }
+            ForEach(state.savedSpeakers) { speaker in
+                HStack(spacing: 6) {
+                    Image(systemName: speaker.host == state.host ? "largecircle.fill.circle" : "circle")
+                        .foregroundStyle(speaker.host == state.host ? Color.accentColor : Color.secondary)
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text(speaker.name).lineLimit(1)
+                        Text(speaker.host)
+                            .font(.caption2.monospaced())
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 0)
+                    Button {
+                        state.remove(speaker)
+                    } label: {
+                        Image(systemName: "trash")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Retirer cette enceinte")
+                }
+                .contentShape(Rectangle())
+                .onTapGesture { state.selectHost(speaker.host) }
             }
-            Text("Visible dans l'app KEF Connect : Réglages → enceinte → Infos → Adresse IP.")
+        }
+    }
+
+    // MARK: Ajouter une enceinte
+
+    private var addSpeakerSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Ajouter une enceinte")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button {
+                    state.scan()
+                } label: {
+                    Label("Scanner le réseau", systemImage: "wifi")
+                }
+                .buttonStyle(.borderless)
+                .disabled(state.isScanning)
+            }
+
+            if state.isScanning {
+                ProgressView(value: state.scanProgress)
+                    .progressViewStyle(.linear)
+                Text("Recherche d'enceintes sur le réseau…")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
+            ForEach(state.discovered) { speaker in
+                HStack(spacing: 6) {
+                    Image(systemName: "hifispeaker")
+                        .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text(speaker.name).lineLimit(1)
+                        Text(speaker.host)
+                            .font(.caption2.monospaced())
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 0)
+                    Button("Ajouter") { state.add(speaker) }
+                        .buttonStyle(.borderless)
+                }
+            }
+
+            if !state.isScanning && state.discovered.isEmpty && triedScanWithNoResult {
+                Text("Aucune nouvelle enceinte trouvée. Vérifie qu'elle est allumée et sur le même réseau, ou saisis son IP ci-dessous.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack {
+                TextField("192.168.1.x", text: $manualIP)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit(addManual)
+                Button("Ajouter", action: addManual)
+                    .disabled(manualIP.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+            Text("IP visible dans l'app KEF Connect : Réglages → enceinte → Infos → Adresse IP.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }
+    }
+
+    /// `true` une fois qu'un scan s'est terminé sans rien remonter de nouveau.
+    @State private var triedScanWithNoResult = false
+
+    private func addManual() {
+        let ip = manualIP.trimmingCharacters(in: .whitespaces)
+        guard !ip.isEmpty else { return }
+        state.addManualHost(ip)
+        manualIP = ""
     }
 
     private var nowPlayingView: some View {

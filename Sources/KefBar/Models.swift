@@ -47,6 +47,32 @@ enum Source: String, CaseIterable, Identifiable, Hashable {
     }
 }
 
+/// Une enceinte KEF connue de l'app (découverte ou ajoutée à la main).
+///
+/// L'identité stable est l'**adresse MAC** quand on la connaît : l'IP peut changer
+/// (DHCP), pas la MAC. À défaut de MAC, on retombe sur l'IP. Cela permet de suivre
+/// une enceinte dont l'IP a bougé et de gérer plusieurs enceintes sans collision.
+struct Speaker: Identifiable, Codable, Hashable {
+    /// Adresse IP actuelle (hôte HTTP de l'API KEF).
+    var host: String
+    /// Nom affiché (nom de l'appareil renvoyé par l'enceinte, ou libellé par défaut).
+    var name: String
+    /// Adresse MAC (`settings:/system/primaryMacAddress`) si connue — identité stable.
+    var mac: String?
+
+    /// Identifiant stable : la MAC si disponible, sinon l'IP.
+    var id: String { mac ?? host }
+
+    /// Libellé par défaut quand le nom de l'appareil n'est pas (encore) connu.
+    static let defaultName = "Enceinte KEF"
+
+    init(host: String, name: String = Speaker.defaultName, mac: String? = nil) {
+        self.host = host
+        self.name = name.isEmpty ? Speaker.defaultName : name
+        self.mac = mac
+    }
+}
+
 /// Métadonnées de lecture en cours (best-effort — la structure dépend du service source).
 struct NowPlaying: Equatable {
     var title: String?

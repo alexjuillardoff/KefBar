@@ -31,13 +31,19 @@ keyboard — using the same undocumented local API that the KEF Connect app uses
 
 ### Features
 
+- 🔍 **Auto-discovery** — scan your network to find KEF speakers automatically (no IP hunting)
+- 🔀 **Multiple speakers** — save several speakers and switch between them from the menu bar
+- ✏️ **Manual IP** — add a speaker by typing its address, too
 - 🔈 **Volume + mute** — smooth slider with debounce
 - ⏻ **Power on / standby**
-- 🔀 **Source selector** — Wi-Fi, Bluetooth, TV/HDMI, Optical, Coaxial, Aux
+- 🎛️ **Source selector** — Wi-Fi, Bluetooth, TV/HDMI, Optical, Coaxial, Aux
 - ⏯️ **Transport** — play / pause, next / previous track
 - 🎵 **Now playing** — title, artist and album artwork
 - 🔄 **Auto-refresh** every 3 seconds
 - 🪶 **No Dock icon** — lives quietly in the menu bar (accessory app)
+
+> 💡 DHCP-friendly: speakers are remembered by their **MAC address**, so if a speaker's IP
+> changes, a rescan finds it again and updates the stored address automatically.
 
 ### Supported speakers
 
@@ -51,8 +57,8 @@ keyboard — using the same undocumented local API that the KEF Connect app uses
 - macOS 13 Ventura or newer
 - Xcode 15+ / Swift 5.9+ toolchain (to build from source)
 - Your Mac and the speaker on the **same Wi-Fi network**
-- The speaker's **IP address** (KEF Connect app → Settings → your speaker → Info → IP address).
-  💡 Reserve a **static IP** in your router so it never changes.
+- The speaker's IP is found for you by the built-in **network scan** — or enter it manually
+  (KEF Connect app → Settings → your speaker → Info → IP address).
 
 ### Quick start
 
@@ -63,7 +69,9 @@ cd KefBar
 open ./KefBar.app
 ```
 
-On first launch, click the ⚙️ icon and enter your speaker's IP address.
+On first launch, click **Scan the network** to detect your speakers automatically — or click
+the ⚙️ icon to add one by IP. Got several KEF speakers? Add them all and pick the active one
+from the menu-bar title.
 
 > 👉 New to building Mac apps? Follow the friendly **[step-by-step guide](docs/GUIDE.md)**.
 
@@ -87,6 +95,9 @@ sur votre réseau local.
 
 ### Fonctionnalités
 
+- 🔍 **Découverte automatique** : scan du réseau pour trouver les enceintes KEF (plus besoin de chercher l'IP)
+- 🔀 **Plusieurs enceintes** : enregistre-les toutes et bascule de l'une à l'autre depuis la barre de menus
+- ✏️ **IP manuelle** : tu peux aussi saisir l'adresse à la main
 - Volume + mute (slider, anti-rebond)
 - Marche / arrêt (veille)
 - Sélection de source : Wi-Fi, Bluetooth, TV/HDMI, Optique, Coaxial, Aux
@@ -95,13 +106,16 @@ sur votre réseau local.
 - Rafraîchissement périodique (3 s)
 - Pas d'icône dans le Dock (app accessoire)
 
+> 💡 Compatible DHCP : chaque enceinte est mémorisée par son **adresse MAC**. Si son IP change,
+> un nouveau scan la retrouve et met l'adresse à jour automatiquement.
+
 ### Prérequis
 
 - macOS 13 Ventura ou plus récent
 - Xcode 15+ / toolchain Swift 5.9+
 - L'enceinte et le Mac sur le **même réseau Wi-Fi**
-- L'**adresse IP** de l'enceinte (app KEF Connect → Réglages → enceinte → Infos → Adresse IP).
-  👉 Réserve une **IP fixe** dans ta box pour éviter qu'elle change.
+- L'IP de l'enceinte est trouvée pour toi par le **scan réseau** intégré — ou saisis-la à la main
+  (app KEF Connect → Réglages → enceinte → Infos → Adresse IP).
 
 > 🟢 **Débutant ?** Le **[guide pas à pas](docs/GUIDE.md)** explique tout, sans jargon,
 > de l'installation jusqu'au premier réglage de volume.
@@ -134,16 +148,19 @@ swift run KefBar
 > ⚠️ En `swift run` (sans bundle), l'exception `NSAllowsLocalNetworking` n'est pas
 > appliquée : si les requêtes HTTP sont bloquées, utilise l'option A.
 
-Au premier lancement, clique sur l'icône ⚙️ et saisis l'IP de l'enceinte.
+Au premier lancement, clique sur **Scanner le réseau** pour détecter tes enceintes
+automatiquement — ou sur l'icône ⚙️ pour en ajouter une par IP. Plusieurs enceintes KEF ?
+Ajoute-les toutes et choisis l'active depuis le titre dans la barre de menus.
 
 ### Architecture
 
 | Fichier | Rôle |
 |---|---|
 | `KefClient.swift` | Couche réseau : implémente le protocole HTTP/JSON KEF (getData/setData) |
-| `AppState.swift`  | État observable + actions + polling |
-| `Models.swift`    | `Source`, `NowPlaying`, erreurs |
-| `ContentView.swift` | UI du menu (slider, transport, sources, power) |
+| `Discovery.swift` | Scan du réseau local pour découvrir les enceintes KEF (sondes HTTP concurrentes) |
+| `AppState.swift`  | État observable + actions + polling + liste d'enceintes & scan |
+| `Models.swift`    | `Source`, `Speaker`, `NowPlaying`, erreurs |
+| `ContentView.swift` | UI du menu (gestion des enceintes, slider, transport, sources, power) |
 | `KefBarApp.swift` | Point d'entrée `MenuBarExtra` + politique d'activation accessoire |
 
 ### Le protocole (résumé)
