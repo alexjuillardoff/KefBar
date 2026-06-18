@@ -187,9 +187,10 @@ Ajoute-les toutes et choisis l'active depuis le titre dans la barre de menus.
 | `Discovery.swift` | Scan du réseau local pour découvrir les enceintes KEF (sondes HTTP concurrentes) |
 | `AppState.swift`  | État observable + actions + flux d'évènements temps réel + position + liste d'enceintes & scan |
 | `NowPlayingCenter.swift` | Touches média du clavier (framework MediaPlayer) + intégration « En cours de lecture » macOS |
-| `Models.swift`    | `Source`, `Speaker`, `NowPlaying`, erreurs |
-| `ContentView.swift` | UI du menu (gestion des enceintes, slider, transport, sources, power) |
-| `KefBarApp.swift` | Point d'entrée `MenuBarExtra` + politique d'activation accessoire |
+| `Models.swift`    | `Source`, `MenuBarStyle`, `Speaker`, `NowPlaying`, erreurs |
+| `ContentView.swift` | UI du lecteur (slider, transport, sources, power, réglages avancés) |
+| `SettingsView.swift` | Écran dédié des réglages (enceintes, apparence de la barre de menus, démarrage) |
+| `KefBarApp.swift` | Point d'entrée `MenuBarExtra` (label personnalisable) + politique d'activation accessoire |
 
 ### Le protocole (résumé)
 
