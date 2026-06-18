@@ -46,7 +46,7 @@ des callbacks (touches → actions).
 | [`Discovery.swift`](../Sources/KefBar/Discovery.swift) | Scan actif du sous-réseau local (`getifaddrs` + sondes `KefClient.identify()` concurrentes) pour découvrir les enceintes KEF. Pur, sans dépendance UI. |
 | [`AppState.swift`](../Sources/KefBar/AppState.swift) | `@MainActor ObservableObject` : état `@Published`, orchestration async, polling, debounce, **liste d'enceintes** + scan, persistance (IP active + enceintes). Détient le `NowPlayingCenter`. |
 | [`NowPlayingCenter.swift`](../Sources/KefBar/NowPlayingCenter.swift) | `@MainActor`. Pont vers **MediaPlayer** : reçoit les **touches média** physiques (`MPRemoteCommandCenter`) et publie la lecture en cours (`MPNowPlayingInfoCenter`) — ce qui fait de l'app l'application « En cours de lecture » du système, condition pour recevoir ces touches. Aucune dépendance UI/réseau. |
-| [`Models.swift`](../Sources/KefBar/Models.swift) | `Source` (enum + libellés FR + SF Symbols), `MenuBarStyle` (apparence du label de la barre de menus), `Speaker` (enceinte connue, identité par MAC), `PlayMode` (cycle répétition/aléatoire), `QueueItem`, `NowPlaying`, `KefError`. |
+| [`Models.swift`](../Sources/KefBar/Models.swift) | `Source` (enum + libellés FR + SF Symbols), `MenuBarStyle` (apparence du label de la barre de menus), `MenuBarTextSource` (texte fixe / morceau en cours), `Speaker` (enceinte connue, identité par MAC), `PlayMode` (cycle répétition/aléatoire), `QueueItem`, `NowPlaying`, `KefError`. |
 | [`ContentView.swift`](../Sources/KefBar/ContentView.swift) | UI déclarative du **lecteur** : en-tête (enceinte, IP, point d'état, bouton allumer/éteindre), **sélecteur de source en boutons-raccourcis carrés** (icône + libellé `shortName`, taille calculée pour paver la largeur), now-playing (pochette + titre/artiste/album **défilants**, pause au survol — `MarqueeText`), barre de progression, transport (Boucle à gauche, puis précédent/pause/suivant), volume (slider pleine largeur + boutons −/+ par pas de 1, puis icône haut-parleur/muet + niveau **en % éditable** au clavier — `VolumeField`), **réglages avancés** (DSP, minuterie de veille, file d'attente), pied (Paramètres + Quitter). Route vers `SettingsView` quand les réglages sont ouverts (ou tant qu'aucune enceinte n'existe). Inclut les vues utilitaires `MarqueeText` (défilement avec pause au survol) et `VolumeField` (`NSTextField` : saisie du %, flèches ↑/↓ pour ±1). |
 | [`SettingsView.swift`](../Sources/KefBar/SettingsView.swift) | **Écran dédié des réglages**, affiché à la place du lecteur : gestion des enceintes (liste, scan réseau, ajout par IP), **apparence de la barre de menus** (icône / texte / les deux), lancement au démarrage. Bouton « Terminé » pour revenir (masqué tant qu'aucune enceinte n'est enregistrée). |
 | [`KefBarApp.swift`](../Sources/KefBar/KefBarApp.swift) | `@main`, `MenuBarExtra(.window)`, label personnalisable (`menuBarLabel`), `AppDelegate → setActivationPolicy(.accessory)`. |
@@ -371,9 +371,11 @@ label: { menuBarLabel }   // icône / texte / les deux, selon les réglages
 - `.window` : indispensable pour héberger le **slider** (le style `.menu` ne gère que des items).
 - `AppDelegate.applicationDidFinishLaunching` → `NSApp.setActivationPolicy(.accessory)` : masque
   le Dock **même hors bundle** (`swift run`).
-- **Label personnalisable** : `menuBarStyle` (`MenuBarStyle` : `.icon` / `.text` / `.both`) et
-  `menuBarText` (texte libre) sont persistés dans UserDefaults et réglés dans les Paramètres.
-  L'icône reflète l'état d'alimentation ; un texte vide retombe sur l'icône.
+- **Label personnalisable** : `menuBarStyle` (`MenuBarStyle` : `.icon` / `.text` / `.both`),
+  `menuBarTextSource` (`MenuBarTextSource` : `.custom` libellé fixe / `.nowPlaying` morceau en
+  cours) et `menuBarText` (texte libre) sont persistés dans UserDefaults et réglés dans les
+  Paramètres. L'icône reflète l'état d'alimentation ; `menuBarResolvedText` calcule le texte à
+  afficher (titre en cours borné à 40 caractères) — un texte vide retombe sur l'icône.
 
 ## 8. Bundle `.app`, ATS & signature (pièges)
 

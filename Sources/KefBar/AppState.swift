@@ -88,6 +88,25 @@ final class AppState: ObservableObject {
         didSet { UserDefaults.standard.set(menuBarText, forKey: Self.menuBarTextKey) }
     }
 
+    /// Source du texte de la barre de menus (libellé fixe ou morceau en cours), persistée.
+    @Published var menuBarTextSource: MenuBarTextSource {
+        didSet { UserDefaults.standard.set(menuBarTextSource.rawValue, forKey: Self.menuBarTextSourceKey) }
+    }
+
+    /// Texte effectivement affiché dans la barre de menus selon la source choisie. Vide ⇒
+    /// le label retombe sur l'icône seule (rien à afficher : texte vide ou aucune lecture).
+    var menuBarResolvedText: String {
+        switch menuBarTextSource {
+        case .custom:
+            return menuBarText.trimmingCharacters(in: .whitespaces)
+        case .nowPlaying:
+            guard isOn, let title = nowPlaying?.title?.trimmingCharacters(in: .whitespaces),
+                  !title.isEmpty else { return "" }
+            // Borne la longueur pour ne pas pousser les autres menus hors de l'écran.
+            return title.count > 40 ? title.prefix(39) + "…" : title
+        }
+    }
+
     var isMuted: Bool { volume == 0 }
 
     /// L'enceinte enregistrée correspondant à l'IP active, si elle existe.
@@ -97,6 +116,7 @@ final class AppState: ObservableObject {
     private static let speakersKey = "kef.speakers"
     private static let menuBarStyleKey = "kef.menuBarStyle"
     private static let menuBarTextKey = "kef.menuBarText"
+    private static let menuBarTextSourceKey = "kef.menuBarTextSource"
     /// Texte par défaut affiché dans la barre de menus quand l'utilisateur choisit le mode texte.
     static let defaultMenuBarText = "KEF"
     private var client: KefClient?
@@ -125,6 +145,8 @@ final class AppState: ObservableObject {
         menuBarStyle = UserDefaults.standard.string(forKey: Self.menuBarStyleKey)
             .flatMap(MenuBarStyle.init(rawValue:)) ?? .icon
         menuBarText = UserDefaults.standard.string(forKey: Self.menuBarTextKey) ?? Self.defaultMenuBarText
+        menuBarTextSource = UserDefaults.standard.string(forKey: Self.menuBarTextSourceKey)
+            .flatMap(MenuBarTextSource.init(rawValue:)) ?? .custom
 
         var speakers = Self.loadSpeakers()
         // Migration : un utilisateur d'une version précédente n'a qu'une IP — on la

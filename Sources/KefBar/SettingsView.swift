@@ -180,12 +180,22 @@ struct SettingsView: View {
             .labelsHidden()
 
             if state.menuBarStyle.showsText {
-                TextField("Texte (ex. KEF)", text: $state.menuBarText)
-                    .textFieldStyle(.roundedBorder)
-                    .controlSize(.small)
+                Picker("Texte", selection: $state.menuBarTextSource) {
+                    ForEach(MenuBarTextSource.allCases) { source in
+                        Text(source.label).tag(source)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+
+                if state.menuBarTextSource == .custom {
+                    TextField("Texte (ex. KEF)", text: $state.menuBarText)
+                        .textFieldStyle(.roundedBorder)
+                        .controlSize(.small)
+                }
             }
 
-            Text("Personnalise l'icône et le texte affichés dans la barre de menus, en haut de l'écran.")
+            Text("Personnalise l'icône et le texte affichés dans la barre de menus, en haut de l'écran. Le texte peut être fixe ou refléter le morceau en cours de lecture.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

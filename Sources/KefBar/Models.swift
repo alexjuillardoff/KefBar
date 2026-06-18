@@ -84,6 +84,22 @@ enum MenuBarStyle: String, CaseIterable, Identifiable {
     var showsIcon: Bool { self != .text }
 }
 
+/// Ce que le texte de la barre de menus affiche : un libellé fixe saisi par l'utilisateur,
+/// ou le morceau en cours de lecture (titre). Persisté en `String` (rawValue) dans UserDefaults.
+enum MenuBarTextSource: String, CaseIterable, Identifiable {
+    case custom
+    case nowPlaying
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .custom:     return "Texte fixe"
+        case .nowPlaying: return "Morceau en cours"
+        }
+    }
+}
+
 /// Une enceinte KEF connue de l'app (découverte ou ajoutée à la main).
 ///
 /// L'identité stable est l'**adresse MAC** quand on la connaît : l'IP peut changer
