@@ -44,7 +44,7 @@ keyboard — using the same undocumented local API that the KEF Connect app uses
 - ⏲️ **Sleep timer** — auto power-off after 15 / 30 / 45 / 60 / 90 min
 - 🗒️ **Play queue** *(best-effort)* — upcoming tracks, shown in advanced settings
 - ⌨️ **Media keys** — the Mac's physical play/pause, ⏮/⏭ keys control the speaker; playback also shows up in Control Center
-- 🎵 **Now playing** — album artwork plus title, artist and album that **scroll** when too long (hover to pause), and a **progress bar** (elapsed / total)
+- 🎵 **Now playing** — album artwork plus title, artist and album that **scroll** when too long (hover to pause), and an **interactive progress bar** (elapsed / total) — click or drag to seek (best-effort, unverified on hardware)
 - 🔄 **Real-time updates** — subscribes to the speaker's event stream (long-poll) for near-instant refresh, with a polling fallback
 - 🚀 **Launch at login** — optional, via `SMAppService`
 - 🪶 **No Dock icon** — lives quietly in the menu bar (accessory app)
@@ -121,7 +121,7 @@ sur votre réseau local.
 - ⏲️ **Minuterie de veille** : extinction automatique après 15 / 30 / 45 / 60 / 90 min
 - 🗒️ **File d'attente** *(best-effort)* : pistes à venir, dans les réglages avancés
 - ⌨️ **Touches média du clavier** : les touches lecture/pause, ⏮/⏭ du Mac pilotent l'enceinte ; la lecture apparaît aussi dans le Centre de contrôle
-- Pochette, puis titre, artiste et album qui **défilent** s'ils sont trop longs (pause au survol), et **barre de progression** (temps écoulé / total) en cours de lecture
+- Pochette, puis titre, artiste et album qui **défilent** s'ils sont trop longs (pause au survol), et **barre de progression interactive** (temps écoulé / total) — clic ou glissement pour déplacer la lecture (best-effort, non vérifié sur matériel)
 - Mise à jour **temps réel** : abonnement au flux d'évènements de l'enceinte (long-poll), réveil quasi instantané, avec repli sur un sondage périodique
 - 🚀 **Lancement au démarrage** : optionnel, via `SMAppService`
 - 🏷️ **Barre de menus personnalisable de A à Z** : active/désactive indépendamment chaque élément — icône, **titre**, **artiste**, **timecode** (qui **défile** s'il est trop long), et de vrais **boutons cliquables** en haut de l'écran : marche/arrêt, précédent, lecture/pause, suivant, muet

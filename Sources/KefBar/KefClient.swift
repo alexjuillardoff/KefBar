@@ -194,15 +194,28 @@ struct KefClient {
 
     // MARK: - Transport
 
-    private func control(_ command: String) async throws {
+    private func control(_ command: String, extra: [String: Any] = [:]) async throws {
+        var value: [String: Any] = ["control": command]
+        value.merge(extra) { _, new in new }
         try await setData(path: "player:player/control",
-                          value: ["control": command],
+                          value: value,
                           roles: "activate")
     }
 
     func playPause() async throws { try await control("pause") }
     func next() async throws { try await control("next") }
     func previous() async throws { try await control("previous") }
+
+    /// Déplace la tête de lecture à `ms` millisecondes depuis le début de la piste (clic ou
+    /// glissement sur la barre de progression).
+    ///
+    /// ⚠️ **Non vérifié sur matériel.** On emploie la **forme étendue** de la commande de
+    /// transport repérée par `m-lange` (`{"control":"<cmd>", "<type>":"<value>"}`), ici
+    /// `{"control":"seek","i64_":<ms>}` — cohérente avec la position lue en `i64_` (ms). Selon le
+    /// service source et le firmware, le seek peut être refusé : l'erreur remonte alors à l'appelant.
+    func seek(toMs ms: Int) async throws {
+        try await control("seek", extra: ["i64_": max(0, ms)])
+    }
 
     // MARK: - Lecture en cours
 

@@ -109,6 +109,7 @@ Toute lecture renvoie un **tableau JSON à un seul élément**, dont l'objet por
 | **État alimentation (lecture)** | `settings:/kef/host/speakerStatus` | `value` | `[{"type":"kefSpeakerStatus","kefSpeakerStatus":"powerOn"}]` |
 | **Mute** | `settings:/mediaPlayer/mute` | `value` | `bool_` |
 | **Transport** | `player:player/control` | **`activate`** | `{"control":"pause"\|"next"\|"previous"}` |
+| Seek (**non vérifié**) | `player:player/control` | **`activate`** | forme étendue `{"control":"seek","i64_":<ms>}` (voir A.5) |
 | **Lecture en cours** | `player:player/data` | `value` | objet imbriqué (voir A.5) |
 | **Position de lecture** | `player:player/data/playTime` | `value` | `i64_` en ms (voir A.5) |
 | Mode lecture (repeat/shuffle) | `settings:/mediaPlayer/playMode` | `value` | type **`playerPlayMode`** — **implémenté** ; écriture refusée hors lecture (voir A.11) |
@@ -215,6 +216,14 @@ l'emplacement dépend du service).
 > susceptible de varier selon le firmware/service — voir
 > [ARCHITECTURE.md §6](ARCHITECTURE.md#6-limites-et-points-à-valider).
 
+Seek (**non vérifié sur matériel**) : KefBar rend la barre de progression **interactive** (clic /
+glissement) et déplace la tête de lecture via [`KefClient.seek(toMs:)`](../Sources/KefBar/KefClient.swift),
+en employant la **forme étendue** de la commande de transport repérée par `m-lange`
+(`{"control":"seek","i64_":<ms>}`, `roles=activate` sur `player:player/control`) — `i64_` étant
+cohérent avec l'unité de `playTime`. Selon le service source et le firmware, le seek peut être
+refusé (l'enceinte répond alors par une erreur, gérée en amont). Le scrubber de la pastille « En
+cours de lecture » de macOS (`changePlaybackPositionCommand`) emprunte le même chemin.
+
 ## A.6 Mute : deux méthodes
 
 1. **Chemin dédié** :
@@ -236,6 +245,7 @@ l'emplacement dépend du service).
 | `toggle_play_pause()` | `setData player:player/control activate {"control":"pause"}` |
 | `next_track()` | `… {"control":"next"}` |
 | `previous_track()` | `… {"control":"previous"}` |
+| *seek* (KefBar, **non vérifié**) | `… {"control":"seek","i64_":<ms>}` (forme étendue `m-lange`) |
 | `.song_information` | `getData player:player/data` (parse trackRoles) |
 | `.mac_address` | `getData settings:/system/primaryMacAddress` |
 | `poll_speaker(timeout, poll_song_status)` | cycle `modifyQueue` + `pollQueue` (A.8) |

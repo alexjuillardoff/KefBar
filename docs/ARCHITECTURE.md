@@ -49,7 +49,7 @@ des callbacks (touches → actions).
 | [`AppState.swift`](../Sources/KefBar/AppState.swift) | `@MainActor ObservableObject` : état `@Published`, orchestration async, polling, debounce, **liste d'enceintes** + scan, persistance (IP active + enceintes). Détient le `NowPlayingCenter`. |
 | [`NowPlayingCenter.swift`](../Sources/KefBar/NowPlayingCenter.swift) | `@MainActor`. Pont vers **MediaPlayer** : reçoit les **touches média** physiques (`MPRemoteCommandCenter`) et publie la lecture en cours (`MPNowPlayingInfoCenter`) — ce qui fait de l'app l'application « En cours de lecture » du système, condition pour recevoir ces touches. Aucune dépendance UI/réseau. |
 | [`Models.swift`](../Sources/KefBar/Models.swift) | `Source` (enum + libellés FR + SF Symbols), `Speaker` (enceinte connue, identité par MAC), `PlayMode` (cycle répétition/aléatoire), `QueueItem`, `NowPlaying`, `KefError`. |
-| [`ContentView.swift`](../Sources/KefBar/ContentView.swift) | UI déclarative du **lecteur** : en-tête (enceinte, IP, point d'état, bouton allumer/éteindre), **sélecteur de source en boutons-raccourcis carrés** (icône + libellé `shortName`, taille calculée pour paver la largeur), now-playing (pochette + titre/artiste/album **défilants**, pause au survol — `MarqueeText`), barre de progression, transport (Boucle à gauche, puis précédent/pause/suivant), volume (slider pleine largeur + boutons −/+ par pas de 1, puis icône haut-parleur/muet + niveau **en % éditable** au clavier — `VolumeField`), **réglages avancés** (DSP, minuterie de veille, file d'attente), pied (Paramètres + Quitter). Route vers `SettingsView` quand les réglages sont ouverts (ou tant qu'aucune enceinte n'existe). Inclut les vues utilitaires `MarqueeText`, `VolumeField`, et **`MenuBarTitle`** (texte à chasse fixe qui défile dans la barre de menus). |
+| [`ContentView.swift`](../Sources/KefBar/ContentView.swift) | UI déclarative du **lecteur** : en-tête (enceinte, IP, point d'état, bouton allumer/éteindre), **sélecteur de source en boutons-raccourcis carrés** (icône + libellé `shortName`, taille calculée pour paver la largeur), now-playing (pochette + titre/artiste/album **défilants**, pause au survol — `MarqueeText`), barre de progression **interactive** (`SeekBar` — clic/glissement → seek), transport (Boucle à gauche, puis précédent/pause/suivant), volume (slider pleine largeur + boutons −/+ par pas de 1, puis icône haut-parleur/muet + niveau **en % éditable** au clavier — `VolumeField`), **réglages avancés** (DSP, minuterie de veille, file d'attente), pied (Paramètres + Quitter). Route vers `SettingsView` quand les réglages sont ouverts (ou tant qu'aucune enceinte n'existe). Inclut les vues utilitaires `SeekBar` (barre de progression cliquable/glissable), `MarqueeText`, `VolumeField`, et **`MenuBarTitle`** (texte à chasse fixe qui défile dans la barre de menus). |
 | [`SettingsView.swift`](../Sources/KefBar/SettingsView.swift) | **Écran dédié des réglages**, affiché à la place du lecteur : gestion des enceintes (liste, scan réseau, ajout par IP), **personnalisation complète de la barre de menus** (bascules indépendantes : icône, titre, artiste, timecode, et boutons marche/arrêt, précédent, lecture/pause, suivant, muet), lancement au démarrage. Bouton « Terminé » pour revenir (masqué tant qu'aucune enceinte n'est enregistrée). |
 | [`MenuBarController.swift`](../Sources/KefBar/MenuBarController.swift) | **Propriétaire AppKit de la barre de menus.** Un `NSStatusItem` héberge une vue SwiftUI `MenuBarRootView` (texte **et boutons cliquables** aux actions distinctes), et un `NSPopover` présente `ContentView`. Remplace `MenuBarExtra`, dont le label est une zone de clic unique incapable d'héberger plusieurs boutons. Pilote `popoverAppeared()`/`popoverDisappeared()`. |
 | [`KefBarApp.swift`](../Sources/KefBar/KefBarApp.swift) | `@main`, scène `Settings` vide (pas de fenêtre principale). `@MainActor AppDelegate` crée l'`AppState` partagé + le `MenuBarController` et applique `setActivationPolicy(.accessory)`. |
@@ -72,6 +72,7 @@ des callbacks (touches → actions).
 | Éteindre | `powerOff() async throws` | `setSource(.standby)` |
 | Allumer | `powerOn(_ source: Source = .wifi) async throws` | `setSource(source)` |
 | Transport | `playPause()`, `next()`, `previous()` `async throws` | `player:player/control` (`roles=activate`) |
+| Seek (**non vérifié**) | `seek(toMs:) async throws` | `player:player/control` forme étendue `{"control":"seek","i64_":<ms>}` |
 | Now-playing | `nowPlaying() async throws -> NowPlaying?` | `player:player/data` (titre/artiste/album/pochette + **durée** best-effort) |
 | Position | `playPosition() async throws -> Int` | `player:player/data/playTime` (`i64_`, ms) |
 | Nom appareil | `deviceName() async throws -> String?` | `settings:/deviceName` |
@@ -124,9 +125,9 @@ persisté dans UserDefaults : il **reflète** l'état réel du login item (`SMAp
 
 Actions : `refresh()`, `startEventStream()`, `stopEventStream()`, `startPositionTicker()`,
 `stopPositionTicker()`, `setVolume(_:)`, `nudgeVolume(up:)` (±1), `toggleMute()`, `togglePower()`,
-`select(_:)`, `playPause()`, `next()`, `previous()`, `cyclePlayMode()`, `refreshEQ()` (lecture
-seule), `refreshQueue()`, `refreshNotifications()`, `startSleepTimer(minutes:)`,
-`cancelSleepTimer()`.
+`select(_:)`, `playPause()`, `next()`, `previous()`, `seek(toMs:)` (optimiste + anti-rebond
+150 ms, comme le volume), `cyclePlayMode()`, `refreshEQ()` (lecture seule), `refreshQueue()`,
+`refreshNotifications()`, `startSleepTimer(minutes:)`, `cancelSleepTimer()`.
 
 > **Configuration peu changeante** (plafond de volume, profil DSP) : lue **une seule fois
 > par enceinte** en fin de `refresh()` (`loadSpeakerConfigIfNeeded()`, drapeaux
@@ -273,8 +274,9 @@ et captureraient les touches des autres apps) :
 1. `MPRemoteCommandCenter.shared()` : on s'abonne aux commandes `togglePlayPause`, `play`,
    `pause`, `nextTrack`, `previousTrack`. Les handlers re-sautent sur le main actor
    (`Task { @MainActor in … }`) et appellent les callbacks branchés par `AppState`. Les
-   commandes seek/skip sont **désactivées** ; `changePlaybackPositionCommand` l'est aussi (on
-   **affiche** la position mais l'API KEF n'offre pas de seek → barre en lecture seule).
+   commandes seek/skip avant/arrière sont **désactivées**, mais `changePlaybackPositionCommand`
+   est **active** : le scrubber de la pastille « En cours de lecture » déplace la tête de lecture
+   via `onSeek` → `AppState.seek(toMs:)` (seek best-effort, cf. KefClient — non vérifié matériel).
 2. `MPNowPlayingInfoCenter.default()` : `update(nowPlaying:isOn:elapsed:)` y publie titre/artiste/
    album + pochette, la **durée** et la **position** (avec le débit de lecture, macOS interpole
    la barre de progression sans rafraîchissement continu), et fixe `playbackState`
@@ -454,7 +456,7 @@ Détail complet et confiance par point : [VERIFICATION.md](VERIFICATION.md#3-ce-
 |---|---|
 | **Lectures parallèles** | Dans `refresh()`, remplacer les 6 `await` séquentiels par `async let` + `await` groupé. |
 | ~~**Push temps réel**~~ ✅ | Fait — `runEventLoop()` s'abonne (`modifyQueue`) et enchaîne les long-polls (`pollQueue`) via `KefClient.subscribeToEvents()`/`pollEvents(...)` ([PROTOCOL A.8](PROTOCOL.md#a8-push-temps-réel-long-poll)). Repli polling si indisponible. |
-| ~~**Position / progression**~~ ✅ | Fait — `playPosition()` (`playTime`) + durée du now-playing → barre de progression et position « En cours » macOS. |
+| ~~**Position / progression**~~ ✅ | Fait — `playPosition()` (`playTime`) + durée du now-playing → barre de progression et position « En cours » macOS. **Barre interactive** : clic/glissement → `seek(toMs:)` (commande `seek` best-effort, non vérifiée matériel) ; scrubber « En cours » macOS également actif. |
 | ~~**Multi-enceintes**~~ ✅ | Fait — `AppState.savedSpeakers: [Speaker]` + IP active, sélecteur dans l'en-tête. |
 | ~~**Découverte auto**~~ ✅ | Fait — [`Discovery.swift`](../Sources/KefBar/Discovery.swift) scanne le LAN via sondes HTTP (plus fiable que Bonjour : ne remonte **que** des KEF). |
 | ~~**Touches média (lecture)**~~ ✅ | Fait — [`NowPlayingCenter.swift`](../Sources/KefBar/NowPlayingCenter.swift) : play/pause, ⏮, ⏭ via le clavier (framework MediaPlayer, sans permission). |

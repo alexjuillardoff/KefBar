@@ -186,6 +186,7 @@ final class AppState: ObservableObject {
     private var positionTask: Task<Void, Never>?
     private var menuBarScrollTask: Task<Void, Never>?
     private var volumeSendTask: Task<Void, Never>?
+    private var seekSendTask: Task<Void, Never>?
     private var coverURLShown: URL?
     private var coverTask: Task<Void, Never>?
 
@@ -227,6 +228,7 @@ final class AppState: ObservableObject {
         nowPlayingCenter.onPlayPause = { [weak self] in self?.playPause() }
         nowPlayingCenter.onNext = { [weak self] in self?.next() }
         nowPlayingCenter.onPrevious = { [weak self] in self?.previous() }
+        nowPlayingCenter.onSeek = { [weak self] seconds in self?.seek(toMs: Int(seconds * 1000)) }
 
         // Si la barre de menus affiche le morceau en cours, le suivi temps réel démarre
         // dès le lancement (sans attendre l'ouverture du popover).
@@ -499,6 +501,27 @@ final class AppState: ObservableObject {
     func playPause() { perform { try await $0.playPause() } }
     func next()      { perform { try await $0.next() } }
     func previous()  { perform { try await $0.previous() } }
+
+    /// Déplace la lecture à `ms` millisecondes (clic ou glissement sur la barre de progression,
+    /// ou scrubber « En cours de lecture » de macOS). Mise à jour **optimiste** de la position
+    /// (la barre suit le doigt sans attendre l'aller-retour réseau), puis envoi **anti-rebond**
+    /// — comme le volume, pour ne pas saturer l'enceinte pendant un glissement.
+    func seek(toMs ms: Int) {
+        guard client != nil else { return }
+        let clamped = max(0, ms)
+        positionMs = clamped
+        nowPlayingCenter.updatePosition(elapsed: TimeInterval(clamped) / 1000,
+                                        isPlaying: nowPlaying?.isPlaying == true)
+        seekSendTask?.cancel()
+        seekSendTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            guard !Task.isCancelled, let self, let client = self.client else { return }
+            do {
+                try await client.seek(toMs: clamped)
+                await self.refresh()
+            } catch { self.report(error) }
+        }
+    }
 
     private func perform(_ action: @escaping (KefClient) async throws -> Void) {
         guard let client else { return }

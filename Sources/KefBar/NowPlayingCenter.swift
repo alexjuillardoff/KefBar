@@ -23,6 +23,8 @@ final class NowPlayingCenter {
     var onPlayPause: (() -> Void)?
     var onNext: (() -> Void)?
     var onPrevious: (() -> Void)?
+    /// Déplacement de la tête de lecture (scrubber « En cours de lecture » de macOS), en secondes.
+    var onSeek: ((TimeInterval) -> Void)?
 
     private let commandCenter = MPRemoteCommandCenter.shared()
     private let infoCenter = MPNowPlayingInfoCenter.default()
@@ -55,15 +57,18 @@ final class NowPlayingCenter {
             Task { @MainActor in self?.onPrevious?() }
             return .success
         }
+        // Le scrubber de la pastille « En cours de lecture » déplace la tête de lecture (seek).
+        c.changePlaybackPositionCommand.isEnabled = true
+        c.changePlaybackPositionCommand.addTarget { [weak self] event in
+            guard let e = event as? MPChangePlaybackPositionCommandEvent else { return .commandFailed }
+            Task { @MainActor in self?.onSeek?(e.positionTime) }
+            return .success
+        }
         // Commandes non gérées : désactivées pour ne pas capturer inutilement les touches.
-        // On publie bien la position (barre de progression affichée par macOS), mais l'API KEF
-        // n'offre pas de seek → `changePlaybackPositionCommand` reste désactivée (barre en
-        // lecture seule).
         c.seekForwardCommand.isEnabled = false
         c.seekBackwardCommand.isEnabled = false
         c.skipForwardCommand.isEnabled = false
         c.skipBackwardCommand.isEnabled = false
-        c.changePlaybackPositionCommand.isEnabled = false
     }
 
     // MARK: - Publication de la lecture en cours

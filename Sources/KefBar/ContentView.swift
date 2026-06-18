@@ -212,22 +212,16 @@ struct ContentView: View {
             .overlay(Image(systemName: "music.note").foregroundStyle(.secondary))
     }
 
-    /// Barre de progression + temps écoulé/total. Masquée tant que la durée est inconnue
+    /// Barre de progression **interactive** + temps écoulé/total. Un clic ou un glissement sur la
+    /// barre déplace la tête de lecture (`state.seek`). Masquée tant que la durée est inconnue
     /// (best-effort : tous les services ne la communiquent pas).
     @ViewBuilder
     private var progressBar: some View {
         if let durationMs = state.nowPlaying?.durationMs, durationMs > 0 {
-            let position = min(max(0, state.positionMs), durationMs)
-            VStack(spacing: 2) {
-                ProgressView(value: Double(position), total: Double(durationMs))
-                    .progressViewStyle(.linear)
-                HStack {
-                    Text(Self.timeLabel(position))
-                    Spacer()
-                    Text(Self.timeLabel(durationMs))
-                }
-                .font(.caption2.monospacedDigit())
-                .foregroundStyle(.secondary)
+            SeekBar(positionMs: min(max(0, state.positionMs), durationMs),
+                    durationMs: durationMs,
+                    timeLabel: Self.timeLabel) { ms in
+                state.seek(toMs: ms)
             }
         }
     }
@@ -472,6 +466,81 @@ struct ContentView: View {
             Button("Quitter") { NSApplication.shared.terminate(nil) }
                 .buttonStyle(.borderless)
         }
+    }
+}
+
+// MARK: - Barre de progression interactive (seek)
+
+/// Barre de progression **cliquable et glissable** : un clic positionne la tête de lecture, un
+/// glissement la fait suivre le doigt. Pendant le geste, l'affichage (barre + temps écoulé) suit
+/// la position visée localement (`dragMs`) sans attendre la confirmation réseau ; au relâchement,
+/// `onSeek` envoie la nouvelle position. Hors geste, c'est `positionMs` (l'état réel) qui prime.
+struct SeekBar: View {
+    /// Position courante (déjà bornée à `0…durationMs`).
+    let positionMs: Int
+    let durationMs: Int
+    let timeLabel: (Int) -> String
+    let onSeek: (Int) -> Void
+
+    /// Position visée pendant le geste (nil hors geste).
+    @State private var dragMs: Int?
+
+    private let trackHeight: CGFloat = 4
+    private let knobSize: CGFloat = 11
+
+    /// Position affichée : celle du geste en cours, sinon l'état réel.
+    private var shownMs: Int { dragMs ?? positionMs }
+
+    var body: some View {
+        VStack(spacing: 3) {
+            GeometryReader { geo in
+                let width = geo.size.width
+                let fraction = durationMs > 0 ? Double(shownMs) / Double(durationMs) : 0
+                let x = max(0, min(width, width * CGFloat(fraction)))
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(Color.secondary.opacity(0.25))
+                        .frame(height: trackHeight)
+                    Capsule()
+                        .fill(Color.accentColor)
+                        .frame(width: x, height: trackHeight)
+                    Circle()
+                        .fill(Color.accentColor)
+                        .frame(width: knobSize, height: knobSize)
+                        .shadow(radius: dragMs == nil ? 0 : 1)
+                        .offset(x: x - knobSize / 2)
+                }
+                .frame(height: knobSize)
+                .contentShape(Rectangle())
+                .gesture(
+                    // `minimumDistance: 0` ⇒ un simple clic est aussi capté (seek immédiat).
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { value in
+                            dragMs = Self.ms(at: value.location.x, width: width, duration: durationMs)
+                        }
+                        .onEnded { value in
+                            let ms = Self.ms(at: value.location.x, width: width, duration: durationMs)
+                            dragMs = nil
+                            onSeek(ms)
+                        }
+                )
+            }
+            .frame(height: knobSize)
+            HStack {
+                Text(timeLabel(shownMs))
+                Spacer()
+                Text(timeLabel(durationMs))
+            }
+            .font(.caption2.monospacedDigit())
+            .foregroundStyle(.secondary)
+        }
+    }
+
+    /// Convertit une abscisse de clic en millisecondes, bornée à `0…duration`.
+    private static func ms(at x: CGFloat, width: CGFloat, duration: Int) -> Int {
+        guard width > 0 else { return 0 }
+        let fraction = max(0, min(1, Double(x / width)))
+        return Int((Double(duration) * fraction).rounded())
     }
 }
 
