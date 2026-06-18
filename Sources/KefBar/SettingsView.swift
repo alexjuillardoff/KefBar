@@ -171,34 +171,39 @@ struct SettingsView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-            Picker("Affichage", selection: $state.menuBarStyle) {
-                ForEach(MenuBarStyle.allCases) { style in
-                    Text(style.label).tag(style)
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
+            Text("Affichage")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            menuBarToggle("Icône", systemImage: "hifispeaker", isOn: $state.menuBarShowIcon)
+            menuBarToggle("Titre", systemImage: "music.note", isOn: $state.menuBarShowTitle)
+            menuBarToggle("Artiste", systemImage: "music.mic", isOn: $state.menuBarShowArtist)
+            menuBarToggle("Timecode", systemImage: "clock", isOn: $state.menuBarShowTimecode)
 
-            if state.menuBarStyle.showsText {
-                Picker("Texte", selection: $state.menuBarTextSource) {
-                    ForEach(MenuBarTextSource.allCases) { source in
-                        Text(source.label).tag(source)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
+            Divider()
 
-                if state.menuBarTextSource == .custom {
-                    TextField("Texte (ex. KEF)", text: $state.menuBarText)
-                        .textFieldStyle(.roundedBorder)
-                        .controlSize(.small)
-                }
-            }
+            Text("Boutons")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            menuBarToggle("Marche / Arrêt", systemImage: "power", isOn: $state.menuBarShowPower)
+            menuBarToggle("Précédent", systemImage: "backward.fill", isOn: $state.menuBarShowPrevious)
+            menuBarToggle("Lecture / Pause", systemImage: "playpause.fill", isOn: $state.menuBarShowPlayPause)
+            menuBarToggle("Suivant", systemImage: "forward.fill", isOn: $state.menuBarShowNext)
+            menuBarToggle("Muet", systemImage: "speaker.slash.fill", isOn: $state.menuBarShowMute)
 
-            Text("Personnalise l'icône et le texte affichés dans la barre de menus, en haut de l'écran. Le texte peut être fixe ou refléter le morceau en cours de lecture.")
+            Text("Choisis librement les éléments affichés en haut de l'écran. Le texte (titre · artiste · timecode) défile s'il est trop long ; les boutons pilotent l'enceinte directement depuis la barre de menus.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    /// Une ligne bascule « icône + libellé … interrupteur » pour un élément de la barre de menus.
+    private func menuBarToggle(_ label: String, systemImage: String, isOn: Binding<Bool>) -> some View {
+        Toggle(isOn: isOn) {
+            Label(label, systemImage: systemImage)
+                .font(.caption)
+        }
+        .toggleStyle(.switch)
+        .controlSize(.mini)
     }
 }

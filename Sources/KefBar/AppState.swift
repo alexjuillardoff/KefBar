@@ -78,26 +78,18 @@ final class AppState: ObservableObject {
         didSet { applyLaunchAtLogin(launchAtLogin) }
     }
 
-    /// Apparence du label dans la barre de menus (icône / texte / les deux), persistée.
-    @Published var menuBarStyle: MenuBarStyle {
-        didSet {
-            UserDefaults.standard.set(menuBarStyle.rawValue, forKey: Self.menuBarStyleKey)
-            updateLiveTracking()
-        }
-    }
-
-    /// Texte personnalisé affiché dans la barre de menus (vide ⇒ repli sur l'icône), persisté.
-    @Published var menuBarText: String {
-        didSet { UserDefaults.standard.set(menuBarText, forKey: Self.menuBarTextKey) }
-    }
-
-    /// Source du texte de la barre de menus (libellé fixe ou morceau en cours), persistée.
-    @Published var menuBarTextSource: MenuBarTextSource {
-        didSet {
-            UserDefaults.standard.set(menuBarTextSource.rawValue, forKey: Self.menuBarTextSourceKey)
-            updateLiveTracking()
-        }
-    }
+    /// Éléments de la barre de menus, chacun **activable indépendamment** (« de A à Z »),
+    /// persistés. Texte : icône, titre, artiste, timecode. Boutons : marche/arrêt, précédent,
+    /// lecture/pause, suivant, muet. Chaque changement re-persiste et réévalue le suivi temps réel.
+    @Published var menuBarShowIcon: Bool      { didSet { menuBarFlagChanged(.icon, menuBarShowIcon) } }
+    @Published var menuBarShowTitle: Bool     { didSet { menuBarFlagChanged(.title, menuBarShowTitle) } }
+    @Published var menuBarShowArtist: Bool    { didSet { menuBarFlagChanged(.artist, menuBarShowArtist) } }
+    @Published var menuBarShowTimecode: Bool  { didSet { menuBarFlagChanged(.timecode, menuBarShowTimecode) } }
+    @Published var menuBarShowPower: Bool     { didSet { menuBarFlagChanged(.power, menuBarShowPower) } }
+    @Published var menuBarShowPrevious: Bool  { didSet { menuBarFlagChanged(.previous, menuBarShowPrevious) } }
+    @Published var menuBarShowPlayPause: Bool { didSet { menuBarFlagChanged(.playPause, menuBarShowPlayPause) } }
+    @Published var menuBarShowNext: Bool      { didSet { menuBarFlagChanged(.next, menuBarShowNext) } }
+    @Published var menuBarShowMute: Bool      { didSet { menuBarFlagChanged(.mute, menuBarShowMute) } }
 
     /// Largeur (en caractères) de la fenêtre affichée dans la barre de menus : au-delà, le
     /// texte **défile** au lieu d'être tronqué.
@@ -107,25 +99,32 @@ final class AppState: ObservableObject {
     /// rebouclé côté vue). Permet un glissement pixel par pixel, pas caractère par caractère.
     @Published private(set) var menuBarScrollOffset: Double = 0
 
-    /// Texte **complet** (non tronqué) selon la source choisie. Vide ⇒ le label retombe sur
-    /// l'icône seule. En mode « morceau en cours » : `Titre — Artiste · position / durée`.
+    /// `true` si au moins un élément **textuel** est activé (titre, artiste ou timecode).
+    var menuBarShowsAnyText: Bool { menuBarShowTitle || menuBarShowArtist || menuBarShowTimecode }
+
+    /// Texte **complet** (non tronqué) composé des éléments activés (titre — artiste · timecode).
+    /// Vide quand rien n'est sélectionné, ou que l'enceinte est éteinte / ne joue rien.
     var menuBarFullText: String {
-        switch menuBarTextSource {
-        case .custom:
-            return menuBarText.trimmingCharacters(in: .whitespaces)
-        case .nowPlaying:
-            guard isOn, let np = nowPlaying else { return "" }
-            let title = np.title?.trimmingCharacters(in: .whitespaces) ?? ""
-            guard !title.isEmpty else { return "" }
-            let artist = np.artist?.trimmingCharacters(in: .whitespaces) ?? ""
-            let label = artist.isEmpty ? title : "\(title) — \(artist)"
-            // Timecode : position lue, et durée totale si l'enceinte la communique.
-            let position = Self.timeLabel(positionMs)
-            if let dur = np.durationMs, dur > 0 {
-                return "\(label) · \(position) / \(Self.timeLabel(dur))"
-            }
-            return "\(label) · \(position)"
+        guard isOn, let np = nowPlaying else { return "" }
+        var parts: [String] = []
+        if menuBarShowTitle, let t = np.title?.trimmingCharacters(in: .whitespaces), !t.isEmpty {
+            parts.append(t)
         }
+        if menuBarShowArtist, let a = np.artist?.trimmingCharacters(in: .whitespaces), !a.isEmpty {
+            parts.append(a)
+        }
+        var text = parts.joined(separator: " — ")
+        if menuBarShowTimecode {
+            let position = Self.timeLabel(positionMs)
+            let timecode: String
+            if let dur = np.durationMs, dur > 0 {
+                timecode = "\(position) / \(Self.timeLabel(dur))"
+            } else {
+                timecode = position
+            }
+            text = text.isEmpty ? timecode : "\(text) · \(timecode)"
+        }
+        return text
     }
 
     /// `true` quand le texte courant dépasse la fenêtre et doit donc défiler.
@@ -137,11 +136,16 @@ final class AppState: ObservableObject {
         return String(format: "%d:%02d", seconds / 60, seconds % 60)
     }
 
-    /// `true` quand la barre de menus affiche le morceau en cours : le suivi temps réel
-    /// (flux d'évènements + compteur de position) doit alors tourner **même popover fermé**.
-    private var menuBarNeedsNowPlaying: Bool {
-        menuBarStyle.showsText && menuBarTextSource == .nowPlaying
+    /// `true` quand la barre de menus affiche un élément reflétant l'**état live** de l'enceinte
+    /// (texte, ou boutons lecture/pause/muet/power) : le flux d'évènements doit alors tourner
+    /// **même popover fermé** pour garder titre/icônes à jour.
+    private var menuBarNeedsLiveState: Bool {
+        menuBarShowsAnyText || menuBarShowPlayPause || menuBarShowMute || menuBarShowPower
     }
+
+    /// `true` quand la barre de menus affiche le timecode : le compteur de position (seconde
+    /// par seconde) doit tourner même popover fermé.
+    private var menuBarNeedsPosition: Bool { menuBarShowTimecode }
 
     var isMuted: Bool { volume == 0 }
 
@@ -150,11 +154,31 @@ final class AppState: ObservableObject {
 
     private static let hostKey = "kef.host"
     private static let speakersKey = "kef.speakers"
-    private static let menuBarStyleKey = "kef.menuBarStyle"
-    private static let menuBarTextKey = "kef.menuBarText"
-    private static let menuBarTextSourceKey = "kef.menuBarTextSource"
-    /// Texte par défaut affiché dans la barre de menus quand l'utilisateur choisit le mode texte.
-    static let defaultMenuBarText = "KEF"
+
+    /// Clés UserDefaults des bascules de la barre de menus.
+    enum MenuBarFlag: String {
+        case icon = "kef.menuBar.icon"
+        case title = "kef.menuBar.title"
+        case artist = "kef.menuBar.artist"
+        case timecode = "kef.menuBar.timecode"
+        case power = "kef.menuBar.power"
+        case previous = "kef.menuBar.previous"
+        case playPause = "kef.menuBar.playPause"
+        case next = "kef.menuBar.next"
+        case mute = "kef.menuBar.mute"
+    }
+
+    /// Persiste une bascule puis réévalue le suivi temps réel (appelé depuis les `didSet`).
+    private func menuBarFlagChanged(_ flag: MenuBarFlag, _ value: Bool) {
+        UserDefaults.standard.set(value, forKey: flag.rawValue)
+        updateLiveTracking()
+    }
+
+    /// Lit une bascule (valeur par défaut si la clé n'existe pas encore).
+    private static func loadMenuBarFlag(_ flag: MenuBarFlag, default def: Bool) -> Bool {
+        UserDefaults.standard.object(forKey: flag.rawValue) == nil
+            ? def : UserDefaults.standard.bool(forKey: flag.rawValue)
+    }
     private var client: KefClient?
     private var lastSource: Source = .wifi
     private var previousVolume: Int = 20
@@ -179,11 +203,15 @@ final class AppState: ObservableObject {
         let savedHost = UserDefaults.standard.string(forKey: Self.hostKey) ?? ""
         host = savedHost
         launchAtLogin = Self.isLaunchAtLoginEnabled()
-        menuBarStyle = UserDefaults.standard.string(forKey: Self.menuBarStyleKey)
-            .flatMap(MenuBarStyle.init(rawValue:)) ?? .icon
-        menuBarText = UserDefaults.standard.string(forKey: Self.menuBarTextKey) ?? Self.defaultMenuBarText
-        menuBarTextSource = UserDefaults.standard.string(forKey: Self.menuBarTextSourceKey)
-            .flatMap(MenuBarTextSource.init(rawValue:)) ?? .custom
+        menuBarShowIcon = Self.loadMenuBarFlag(.icon, default: true)
+        menuBarShowTitle = Self.loadMenuBarFlag(.title, default: true)
+        menuBarShowArtist = Self.loadMenuBarFlag(.artist, default: true)
+        menuBarShowTimecode = Self.loadMenuBarFlag(.timecode, default: false)
+        menuBarShowPower = Self.loadMenuBarFlag(.power, default: false)
+        menuBarShowPrevious = Self.loadMenuBarFlag(.previous, default: false)
+        menuBarShowPlayPause = Self.loadMenuBarFlag(.playPause, default: false)
+        menuBarShowNext = Self.loadMenuBarFlag(.next, default: false)
+        menuBarShowMute = Self.loadMenuBarFlag(.mute, default: false)
 
         var speakers = Self.loadSpeakers()
         // Migration : un utilisateur d'une version précédente n'a qu'une IP — on la
@@ -272,15 +300,20 @@ final class AppState: ObservableObject {
     /// qu'il est nécessaire : popover ouvert, **ou** barre de menus en mode « morceau en cours »
     /// (qui doit rester à jour même popover fermé). Idempotent : ne relance pas ce qui tourne déjà.
     private func updateLiveTracking() {
-        if popoverVisible || menuBarNeedsNowPlaying {
+        // Flux d'évènements : popover ouvert, ou barre de menus reflétant l'état live.
+        if popoverVisible || menuBarNeedsLiveState {
             if eventTask == nil { startEventStream() }
-            if positionTask == nil { startPositionTicker() }
         } else {
             stopEventStream()
+        }
+        // Compteur de position : popover ouvert, ou timecode affiché dans la barre de menus.
+        if popoverVisible || menuBarNeedsPosition {
+            if positionTask == nil { startPositionTicker() }
+        } else {
             stopPositionTicker()
         }
         // Défilement du texte (purement local) : actif dès qu'un texte est affiché.
-        if menuBarStyle.showsText {
+        if menuBarShowsAnyText {
             if menuBarScrollTask == nil { startMenuBarScroll() }
         } else {
             stopMenuBarScroll()

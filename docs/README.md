@@ -47,8 +47,10 @@ KefBar/
 ├── Package.swift              # manifeste SwiftPM (exécutable, macOS 13+)
 ├── README.md                  # installation & usage
 ├── Sources/KefBar/
-│   ├── KefBarApp.swift        # point d'entrée : MenuBarExtra + app accessoire
-│   ├── ContentView.swift      # UI du menu (slider, transport, sources, power)
+│   ├── KefBarApp.swift        # point d'entrée : AppDelegate + app accessoire
+│   ├── MenuBarController.swift # NSStatusItem (texte + boutons) + NSPopover
+│   ├── ContentView.swift      # UI du popover (slider, transport, sources, power)
+│   ├── SettingsView.swift     # écran des réglages (enceintes, barre de menus)
 │   ├── AppState.swift         # état observable + actions + flux d'évènements temps réel
 │   ├── NowPlayingCenter.swift # touches média clavier + « En cours de lecture » macOS
 │   ├── KefClient.swift        # couche réseau : LE protocole KEF

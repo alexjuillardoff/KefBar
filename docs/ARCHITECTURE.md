@@ -11,9 +11,11 @@ Quatre couches + un module transverse :
 
 ```
 ┌─────────────────────────────────────────────┐
-│  KefBarApp        scène MenuBarExtra, entrée  │  @main
+│  KefBarApp        @main, AppDelegate          │  crée AppState + MenuBarController
 ├─────────────────────────────────────────────┤
-│  ContentView      UI SwiftUI (le menu)        │  lit AppState, déclenche ses méthodes
+│  MenuBarController  NSStatusItem + NSPopover  │  AppKit : barre de menus (texte + boutons)
+├─────────────────────────────────────────────┤
+│  ContentView      UI SwiftUI (le popover)     │  lit AppState, déclenche ses méthodes
 ├─────────────────────────────────────────────┤
 │  AppState         état observable + actions   │  @MainActor, ObservableObject
 ├─────────────────────────────────────────────┤
@@ -26,10 +28,10 @@ Quatre couches + un module transverse :
 Graphe de dépendances (qui connaît qui) :
 
 ```
-KefBarApp ──▶ ContentView ──▶ AppState ──▶ KefClient ──▶ URLSession
-                  │                │  │         │
-                  │                │  └──▶ NowPlayingCenter ──▶ MediaPlayer (système)
-                  └────────────────┴────────────┴──▶ Models
+KefBarApp ──▶ MenuBarController ──▶ ContentView ──▶ AppState ──▶ KefClient ──▶ URLSession
+                  │                     │              │  │         │
+                  │                     │              │  └──▶ NowPlayingCenter ──▶ MediaPlayer
+                  └─────────────────────┴──────────────┴────────────┴──▶ Models
 ```
 
 Règle : **les dépendances ne pointent que vers le bas**. `KefClient` ignore l'existence de
@@ -46,10 +48,11 @@ des callbacks (touches → actions).
 | [`Discovery.swift`](../Sources/KefBar/Discovery.swift) | Scan actif du sous-réseau local (`getifaddrs` + sondes `KefClient.identify()` concurrentes) pour découvrir les enceintes KEF. Pur, sans dépendance UI. |
 | [`AppState.swift`](../Sources/KefBar/AppState.swift) | `@MainActor ObservableObject` : état `@Published`, orchestration async, polling, debounce, **liste d'enceintes** + scan, persistance (IP active + enceintes). Détient le `NowPlayingCenter`. |
 | [`NowPlayingCenter.swift`](../Sources/KefBar/NowPlayingCenter.swift) | `@MainActor`. Pont vers **MediaPlayer** : reçoit les **touches média** physiques (`MPRemoteCommandCenter`) et publie la lecture en cours (`MPNowPlayingInfoCenter`) — ce qui fait de l'app l'application « En cours de lecture » du système, condition pour recevoir ces touches. Aucune dépendance UI/réseau. |
-| [`Models.swift`](../Sources/KefBar/Models.swift) | `Source` (enum + libellés FR + SF Symbols), `MenuBarStyle` (apparence du label de la barre de menus), `MenuBarTextSource` (texte fixe / morceau en cours), `Speaker` (enceinte connue, identité par MAC), `PlayMode` (cycle répétition/aléatoire), `QueueItem`, `NowPlaying`, `KefError`. |
-| [`ContentView.swift`](../Sources/KefBar/ContentView.swift) | UI déclarative du **lecteur** : en-tête (enceinte, IP, point d'état, bouton allumer/éteindre), **sélecteur de source en boutons-raccourcis carrés** (icône + libellé `shortName`, taille calculée pour paver la largeur), now-playing (pochette + titre/artiste/album **défilants**, pause au survol — `MarqueeText`), barre de progression, transport (Boucle à gauche, puis précédent/pause/suivant), volume (slider pleine largeur + boutons −/+ par pas de 1, puis icône haut-parleur/muet + niveau **en % éditable** au clavier — `VolumeField`), **réglages avancés** (DSP, minuterie de veille, file d'attente), pied (Paramètres + Quitter). Route vers `SettingsView` quand les réglages sont ouverts (ou tant qu'aucune enceinte n'existe). Inclut les vues utilitaires `MarqueeText` (défilement avec pause au survol) et `VolumeField` (`NSTextField` : saisie du %, flèches ↑/↓ pour ±1). |
-| [`SettingsView.swift`](../Sources/KefBar/SettingsView.swift) | **Écran dédié des réglages**, affiché à la place du lecteur : gestion des enceintes (liste, scan réseau, ajout par IP), **apparence de la barre de menus** (icône / texte / les deux), lancement au démarrage. Bouton « Terminé » pour revenir (masqué tant qu'aucune enceinte n'est enregistrée). |
-| [`KefBarApp.swift`](../Sources/KefBar/KefBarApp.swift) | `@main`, `MenuBarExtra(.window)`, label personnalisable (`menuBarLabel`), `AppDelegate → setActivationPolicy(.accessory)`. |
+| [`Models.swift`](../Sources/KefBar/Models.swift) | `Source` (enum + libellés FR + SF Symbols), `Speaker` (enceinte connue, identité par MAC), `PlayMode` (cycle répétition/aléatoire), `QueueItem`, `NowPlaying`, `KefError`. |
+| [`ContentView.swift`](../Sources/KefBar/ContentView.swift) | UI déclarative du **lecteur** : en-tête (enceinte, IP, point d'état, bouton allumer/éteindre), **sélecteur de source en boutons-raccourcis carrés** (icône + libellé `shortName`, taille calculée pour paver la largeur), now-playing (pochette + titre/artiste/album **défilants**, pause au survol — `MarqueeText`), barre de progression, transport (Boucle à gauche, puis précédent/pause/suivant), volume (slider pleine largeur + boutons −/+ par pas de 1, puis icône haut-parleur/muet + niveau **en % éditable** au clavier — `VolumeField`), **réglages avancés** (DSP, minuterie de veille, file d'attente), pied (Paramètres + Quitter). Route vers `SettingsView` quand les réglages sont ouverts (ou tant qu'aucune enceinte n'existe). Inclut les vues utilitaires `MarqueeText`, `VolumeField`, et **`MenuBarTitle`** (texte à chasse fixe qui défile dans la barre de menus). |
+| [`SettingsView.swift`](../Sources/KefBar/SettingsView.swift) | **Écran dédié des réglages**, affiché à la place du lecteur : gestion des enceintes (liste, scan réseau, ajout par IP), **personnalisation complète de la barre de menus** (bascules indépendantes : icône, titre, artiste, timecode, et boutons marche/arrêt, précédent, lecture/pause, suivant, muet), lancement au démarrage. Bouton « Terminé » pour revenir (masqué tant qu'aucune enceinte n'est enregistrée). |
+| [`MenuBarController.swift`](../Sources/KefBar/MenuBarController.swift) | **Propriétaire AppKit de la barre de menus.** Un `NSStatusItem` héberge une vue SwiftUI `MenuBarRootView` (texte **et boutons cliquables** aux actions distinctes), et un `NSPopover` présente `ContentView`. Remplace `MenuBarExtra`, dont le label est une zone de clic unique incapable d'héberger plusieurs boutons. Pilote `popoverAppeared()`/`popoverDisappeared()`. |
+| [`KefBarApp.swift`](../Sources/KefBar/KefBarApp.swift) | `@main`, scène `Settings` vide (pas de fenêtre principale). `@MainActor AppDelegate` crée l'`AppState` partagé + le `MenuBarController` et applique `setActivationPolicy(.accessory)`. |
 
 ## 3. Surface d'API
 
@@ -309,7 +312,7 @@ Deux pièges, deux parades :
    `NSAllowsLocalNetworking`). [`KefClient.artworkURL(from:)`](../Sources/KefBar/KefClient.swift)
    relève donc le schéma en `https://` pour les hôtes publics (ces CDN servent en HTTPS) et
    laisse en HTTP les pochettes servies par l'enceinte (IP locale / AirPlay).
-2. **`AsyncImage` peu fiable en popover `MenuBarExtra`.** L'image se charge correctement via
+2. **`AsyncImage` peu fiable dans le popover de la barre de menus.** L'image se charge correctement via
    `URLSession`, mais `AsyncImage` ne la rend pas de façon fiable dans ce contexte. `AppState`
    charge donc la pochette lui-même en `NSImage`
    ([`updateCover`](../Sources/KefBar/AppState.swift), rechargée seulement quand l'URL change)
@@ -362,32 +365,40 @@ son IP** (et suit l'enceinte active si c'est elle). À défaut de MAC, l'IP fait
 
 ## 7. Entrée & barre de menus
 
+L'app **n'a pas de fenêtre principale** : `KefBarApp` ne déclare qu'une scène `Settings` vide,
+et tout vit dans la barre de menus, gérée en **AppKit** par `MenuBarController`.
+
 ```swift
-MenuBarExtra { ContentView().environmentObject(state) }
-label: { menuBarLabel }   // icône / texte / les deux, selon les réglages
-.menuBarExtraStyle(.window)
+// KefBarApp : @MainActor AppDelegate
+state = AppState()
+menuBar = MenuBarController(state: state)      // NSStatusItem + NSPopover
+NSApp.setActivationPolicy(.accessory)          // pas d'icône Dock, même hors bundle
 ```
 
-- `.window` : indispensable pour héberger le **slider** (le style `.menu` ne gère que des items).
-- `AppDelegate.applicationDidFinishLaunching` → `NSApp.setActivationPolicy(.accessory)` : masque
-  le Dock **même hors bundle** (`swift run`).
-- **Label personnalisable** : `menuBarStyle` (`MenuBarStyle` : `.icon` / `.text` / `.both`),
-  `menuBarTextSource` (`MenuBarTextSource` : `.custom` libellé fixe / `.nowPlaying` morceau en
-  cours) et `menuBarText` (texte libre) sont persistés dans UserDefaults et réglés dans les
-  Paramètres. L'icône reflète l'état d'alimentation ; `menuBarFullText` compose le texte complet
-  — en mode morceau : `Titre — Artiste · position / durée`. Un texte vide retombe sur l'icône.
+**Pourquoi pas `MenuBarExtra` ?** Son label est une **zone de clic unique** qui ne fait
+qu'ouvrir le popover : impossible d'y mettre plusieurs boutons aux actions distinctes. Pour de
+vrais contrôles cliquables dans la barre de menus, on pose une vue SwiftUI (`MenuBarRootView`)
+dans le bouton d'un `NSStatusItem` (calée sur ses bords par autolayout ⇒ largeur intrinsèque),
+et on présente `ContentView` dans un `NSPopover` (`.transient`) ouvert/fermé à la demande.
+
+- **Customisation « de A à Z »** : chaque élément a une bascule persistée (`AppState.MenuBarFlag`) —
+  texte (`menuBarShowIcon`/`Title`/`Artist`/`Timecode`) et boutons (`menuBarShowPower`/`Previous`/
+  `PlayPause`/`Next`/`Mute`). `menuBarFullText` compose `Titre — Artiste · position / durée` à
+  partir des éléments textuels activés. L'icône s'affiche **d'office** si aucun texte n'est visible,
+  pour garder un point d'accès au popover.
 - **Défilement (marquee) fluide** : sous `menuBarMaxChars` (28) le texte est affiché tel quel ;
   au-delà, la vue `MenuBarTitle` le fait **glisser pixel par pixel** dans une fenêtre clippée de
-  largeur fixe (deux copies espacées d'un écart, bouclage sans couture). Le label est rendu en
-  **chasse fixe** : la largeur du caractère est donc connue (mesurée via `NSFont`), ce qui rend
-  le clip et la boucle exacts. `menuBarScrollTask` avance `menuBarScrollOffset` en **points**
-  (~30 pts/s à ~30 fps, purement local) ; la vue reboucle l'offset par modulo.
-- **Suivi popover fermé** : normalement le flux d'évènements et le compteur de position ne
-  tournent que pendant que le popover est ouvert (`popoverAppeared`/`popoverDisappeared` →
-  `updateLiveTracking`). En mode barre de menus « morceau en cours », `menuBarNeedsNowPlaying`
-  les maintient actifs **même popover fermé** pour que titre/artiste/timecode restent à jour.
-  `updateLiveTracking` pilote aussi `menuBarScrollTask` (dès qu'un texte est affiché) et reste
-  idempotent (ne relance pas ce qui tourne déjà).
+  largeur fixe (deux copies espacées d'un écart, bouclage sans couture). Le texte est en **chasse
+  fixe** : la largeur du caractère est connue (mesurée via `NSFont`), donc le clip et la boucle
+  sont exacts. `menuBarScrollTask` avance `menuBarScrollOffset` en **points** (~30 pts/s à ~30 fps,
+  purement local) ; la vue reboucle l'offset par modulo.
+- **Suivi popover fermé** : normalement le flux d'évènements (`menuBarNeedsLiveState`) et le
+  compteur de position (`menuBarNeedsPosition`, pour le timecode) ne tournent que popover ouvert.
+  Dès qu'un élément de la barre de menus reflète l'état live (texte ou boutons lecture/muet/power),
+  `updateLiveTracking` les maintient actifs **même popover fermé**. `MenuBarController` appelle
+  `popoverAppeared()`/`popoverDisappeared()` ; `updateLiveTracking` pilote aussi `menuBarScrollTask`
+  et reste idempotent (ne relance pas ce qui tourne déjà).
+- Le slider du popover impose toujours un `NSPopover` (style « fenêtre »), pas un menu d'items.
 
 ## 8. Bundle `.app`, ATS & signature (pièges)
 

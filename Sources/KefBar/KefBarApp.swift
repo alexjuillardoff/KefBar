@@ -1,53 +1,28 @@
 import SwiftUI
 
+/// Point d'entrée. L'app n'a **pas de fenêtre principale** : toute l'UI vit dans la barre de
+/// menus, gérée en AppKit par `MenuBarController` (un `NSStatusItem` qui héberge une vue SwiftUI
+/// avec texte **et boutons cliquables**, plus un `NSPopover` pour le panneau complet). On ne peut
+/// pas obtenir plusieurs boutons aux actions distinctes avec `MenuBarExtra`, d'où le passage à
+/// AppKit. La scène `Settings` vide ne sert qu'à satisfaire le protocole `App`.
 @main
 struct KefBarApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    @StateObject private var state = AppState()
 
     var body: some Scene {
-        MenuBarExtra {
-            ContentView()
-                .environmentObject(state)
-        } label: {
-            menuBarLabel
-        }
-        .menuBarExtraStyle(.window) // style "fenêtre" : indispensable pour les sliders.
-    }
-
-    /// Label de la barre de menus, personnalisable dans les réglages : icône seule, texte seul,
-    /// ou les deux. L'icône reflète l'état d'alimentation ; le texte est soit un libellé fixe,
-    /// soit le morceau en cours, et **défile en continu** quand il dépasse `menuBarMaxChars`
-    /// (cf. `MenuBarTitle`). Un texte vide retombe sur l'icône.
-    @ViewBuilder
-    private var menuBarLabel: some View {
-        let icon = state.isOn ? "hifispeaker.fill" : "hifispeaker"
-        let text = state.menuBarFullText
-        switch state.menuBarStyle {
-        case .icon:
-            Image(systemName: icon)
-        case .text:
-            if text.isEmpty {
-                Image(systemName: icon)
-            } else {
-                MenuBarTitle(text: text, offset: state.menuBarScrollOffset)
-            }
-        case .both:
-            if text.isEmpty {
-                Image(systemName: icon)
-            } else {
-                HStack(spacing: 6) {
-                    Image(systemName: icon)
-                    MenuBarTitle(text: text, offset: state.menuBarScrollOffset)
-                }
-            }
-        }
+        Settings { EmptyView() }
     }
 }
 
-/// Cache l'icône du Dock (app de type accessoire) même hors bundle .app.
+/// Crée l'état partagé et le contrôleur de barre de menus, et force la politique d'activation
+/// « accessoire » (pas d'icône dans le Dock), même hors bundle .app.
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    let state = AppState()
+    private var menuBar: MenuBarController?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        menuBar = MenuBarController(state: state)
     }
 }

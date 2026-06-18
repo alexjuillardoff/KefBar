@@ -30,12 +30,10 @@ struct ContentView: View {
         .padding(Self.contentPadding)
         .frame(width: Self.popoverWidth)
         .task {
-            state.popoverAppeared()
+            // L'ouverture/fermeture (et donc le suivi temps réel) est pilotée par
+            // `MenuBarController` via `popoverAppeared()`/`popoverDisappeared()`.
             await state.refresh()
             await state.refreshNotifications()
-        }
-        .onDisappear {
-            state.popoverDisappeared()
         }
         .onChange(of: showAdvanced) { open in
             // Charge file d'attente + notifications (best-effort) à l'ouverture du panneau.

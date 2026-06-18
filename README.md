@@ -124,7 +124,7 @@ sur votre réseau local.
 - Pochette, puis titre, artiste et album qui **défilent** s'ils sont trop longs (pause au survol), et **barre de progression** (temps écoulé / total) en cours de lecture
 - Mise à jour **temps réel** : abonnement au flux d'évènements de l'enceinte (long-poll), réveil quasi instantané, avec repli sur un sondage périodique
 - 🚀 **Lancement au démarrage** : optionnel, via `SMAppService`
-- 🏷️ **Barre de menus personnalisable** : choisis l'affichage (icône, texte, ou les deux) ; le texte peut être un libellé **fixe** ou le **morceau en cours** (titre — artiste · position / durée), qui **défile** s'il est trop long — réglé dans les Paramètres
+- 🏷️ **Barre de menus personnalisable de A à Z** : active/désactive indépendamment chaque élément — icône, **titre**, **artiste**, **timecode** (qui **défile** s'il est trop long), et de vrais **boutons cliquables** en haut de l'écran : marche/arrêt, précédent, lecture/pause, suivant, muet
 - Pas d'icône dans le Dock (app accessoire)
 
 > ⚠️ Vérifié sur une LSX II : le **DSP est en lecture seule** — l'enceinte refuse l'écriture sur
@@ -187,10 +187,11 @@ Ajoute-les toutes et choisis l'active depuis le titre dans la barre de menus.
 | `Discovery.swift` | Scan du réseau local pour découvrir les enceintes KEF (sondes HTTP concurrentes) |
 | `AppState.swift`  | État observable + actions + flux d'évènements temps réel + position + liste d'enceintes & scan |
 | `NowPlayingCenter.swift` | Touches média du clavier (framework MediaPlayer) + intégration « En cours de lecture » macOS |
-| `Models.swift`    | `Source`, `MenuBarStyle`, `MenuBarTextSource`, `Speaker`, `NowPlaying`, erreurs |
-| `ContentView.swift` | UI du lecteur (slider, transport, sources, power, réglages avancés) |
-| `SettingsView.swift` | Écran dédié des réglages (enceintes, apparence de la barre de menus, démarrage) |
-| `KefBarApp.swift` | Point d'entrée `MenuBarExtra` (label personnalisable) + politique d'activation accessoire |
+| `Models.swift`    | `Source`, `Speaker`, `NowPlaying`, erreurs |
+| `ContentView.swift` | UI du lecteur (slider, transport, sources, power, réglages avancés) + `MenuBarTitle` (texte défilant) |
+| `SettingsView.swift` | Écran dédié des réglages (enceintes, **personnalisation de la barre de menus**, démarrage) |
+| `MenuBarController.swift` | `NSStatusItem` AppKit : vue SwiftUI (texte + boutons cliquables) + `NSPopover` |
+| `KefBarApp.swift` | Point d'entrée (scène `Settings` vide) ; `AppDelegate` crée l'état + le contrôleur de barre de menus |
 
 ### Le protocole (résumé)
 
