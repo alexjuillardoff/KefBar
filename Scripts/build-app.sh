@@ -5,11 +5,11 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-echo "▶︎ Compilation (release)…"
-swift build -c release
+echo "▶︎ Compilation (release, binaire universel arm64 + x86_64)…"
+swift build -c release --arch arm64 --arch x86_64
 
 APP="KefBar.app"
-BIN="$(swift build -c release --show-bin-path)/KefBar"
+BIN="$(swift build -c release --arch arm64 --arch x86_64 --show-bin-path)/KefBar"
 
 echo "Assemblage de ${APP} ..."
 rm -rf "${APP}"

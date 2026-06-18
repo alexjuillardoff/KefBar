@@ -84,7 +84,7 @@ keyboard — using the same undocumented local API that the KEF Connect app uses
    xattr -dr com.apple.quarantine /Applications/KefBar.app
    ```
 
-> 🧩 The release build is **Apple Silicon (arm64) only**. On an Intel Mac, build from source (below).
+> 🧩 The release is a **universal binary** — runs natively on both Apple Silicon and Intel Macs.
 
 ### Quick start (build from source)
 
@@ -171,7 +171,7 @@ sur votre réseau local.
    xattr -dr com.apple.quarantine /Applications/KefBar.app
    ```
 
-> 🧩 La build publiée est **Apple Silicon (arm64) uniquement**. Sur un Mac Intel, compilez depuis les sources (ci-dessous).
+> 🧩 La release est un **binaire universel** — fonctionne nativement sur Mac Apple Silicon *et* Intel.
 
 ### Lancer (compiler depuis les sources)
 
@@ -183,7 +183,7 @@ cd KefBar
 open ./KefBar.app
 ```
 
-Le script compile en release et fabrique un vrai `KefBar.app` avec l'`Info.plist`
+Le script compile en release (binaire universel arm64 + x86_64) et fabrique un vrai `KefBar.app` avec l'`Info.plist`
 (masquage du Dock + exception réseau local indispensable pour le HTTP en clair).
 
 #### Option B — Xcode
