@@ -114,7 +114,7 @@ Toute lecture renvoie un **tableau JSON à un seul élément**, dont l'objet por
 | Mode lecture (repeat/shuffle) | `settings:/mediaPlayer/playMode` | `value` | type **`playerPlayMode`** — **implémenté** ; écriture refusée hors lecture (voir A.11) |
 | Volume max | `settings:/kef/host/maximumVolume` | `value` | `i32_` (lecture) — **implémenté** : borne le slider |
 | Limite de volume | `settings:/kef/host/volumeLimit` | `value` | **`bool_`** (lecture) — activée ou non |
-| Pas de volume | `settings:/kef/host/volumeStep` | `value` | **`i16_`** (lecture) — **implémenté** : pas des boutons −/+ |
+| Pas de volume | `settings:/kef/host/volumeStep` | `value` | **`i16_`** (lecture) — exposé par `KefClient`, non utilisé par l'UI (boutons −/+ par pas de 1) |
 | Nom de l'appareil | `settings:/deviceName` | `value` | `string_` |
 | Adresse MAC | `settings:/system/primaryMacAddress` | `value` | `string_` |
 | Version firmware | `settings:/releasetext` | `value` | `string_` |

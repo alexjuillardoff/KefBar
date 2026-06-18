@@ -264,7 +264,8 @@ struct KefClient {
         return Self.anyInt(obj)
     }
 
-    /// Pas de volume (`settings:/kef/host/volumeStep`) : incrément des boutons −/+.
+    /// Pas de volume configuré sur l'enceinte (`settings:/kef/host/volumeStep`). Lecture
+    /// disponible mais **non utilisée par l'UI** : les boutons −/+ vont par pas de 1.
     /// Vérifié sur LSX II : renvoyé en `i16_`.
     func volumeStep() async throws -> Int? {
         let obj = try await getData(path: "settings:/kef/host/volumeStep")

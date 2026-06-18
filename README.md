@@ -34,17 +34,17 @@ keyboard — using the same undocumented local API that the KEF Connect app uses
 - 🔍 **Auto-discovery** — scan your network to find KEF speakers automatically (no IP hunting)
 - 🔀 **Multiple speakers** — save several speakers and switch between them from the menu bar
 - ✏️ **Manual IP** — add a speaker by typing its address, too
-- 🔈 **Volume + mute** — smooth slider with debounce
+- 🔈 **Volume** — full-width slider (debounce + haptic feedback) framed by −/+ buttons; below it a speaker icon that mutes on click and the level as an **editable percentage** (type a value, or ↑/↓ arrows for ±1)
 - ⏻ **Power on / standby**
-- 🎛️ **Source selector** — Wi-Fi, Bluetooth, TV/HDMI, Optical, Coaxial, Aux
+- 🎛️ **Source selector** — shortcut buttons for Wi-Fi, Bluetooth, TV/HDMI, Optical, Coaxial, Aux
 - ⏯️ **Transport** — play / pause, next / previous track
 - 🔁 **Play mode** — cycle repeat-all / repeat-one / shuffle from the transport row
-- 🔒 **Volume limit** — the slider respects the speaker's maximum-volume setting; −/+ buttons step by its volume step
+- 🔒 **Volume limit** — the slider respects the speaker's maximum-volume setting; −/+ buttons step by 1
 - 🎛️ **DSP / EQ** *(read-only)* — shows desk/wall mode, phase correction, high-pass, sub out, bass & treble from `kef:eqProfile/v2` (writing is rejected by the speaker — see below)
 - ⏲️ **Sleep timer** — auto power-off after 15 / 30 / 45 / 60 / 90 min
 - 🗒️ **Play queue** *(best-effort)* — upcoming tracks, shown in advanced settings
 - ⌨️ **Media keys** — the Mac's physical play/pause, ⏮/⏭ keys control the speaker; playback also shows up in Control Center
-- 🎵 **Now playing** — title, artist, album artwork and a **progress bar** (elapsed / total)
+- 🎵 **Now playing** — album artwork plus title, artist and album that **scroll** when too long (hover to pause), and a **progress bar** (elapsed / total)
 - 🔄 **Real-time updates** — subscribes to the speaker's event stream (long-poll) for near-instant refresh, with a polling fallback
 - 🚀 **Launch at login** — optional, via `SMAppService`
 - 🪶 **No Dock icon** — lives quietly in the menu bar (accessory app)
@@ -111,17 +111,17 @@ sur votre réseau local.
 - 🔍 **Découverte automatique** : scan du réseau pour trouver les enceintes KEF (plus besoin de chercher l'IP)
 - 🔀 **Plusieurs enceintes** : enregistre-les toutes et bascule de l'une à l'autre depuis la barre de menus
 - ✏️ **IP manuelle** : tu peux aussi saisir l'adresse à la main
-- Volume + mute (slider, anti-rebond)
+- Volume : slider pleine largeur (anti-rebond + retour haptique) encadré des boutons −/+ ; en dessous, une icône haut-parleur qui coupe le son au clic et le niveau **en % éditable** (saisie directe, ou flèches ↑/↓ pour ±1)
 - Marche / arrêt (veille)
-- Sélection de source : Wi-Fi, Bluetooth, TV/HDMI, Optique, Coaxial, Aux
+- Sélection de source : boutons-raccourcis Wi-Fi, Bluetooth, TV/HDMI, Optique, Coaxial, Aux
 - Lecture / pause, piste suivante / précédente
 - 🔁 **Mode de lecture** : bouton unique répéter tout / répéter la piste / aléatoire dans le transport
-- 🔒 **Limite de volume** : le slider respecte le plafond réglé sur l'enceinte ; boutons −/+ calés sur son pas de volume
+- 🔒 **Limite de volume** : le slider respecte le plafond réglé sur l'enceinte ; boutons −/+ par pas de 1
 - 🎛️ **DSP / EQ** *(lecture seule)* : affiche mode bureau/mural, correction de phase, filtre passe-haut, sortie caisson, graves & aigus (`kef:eqProfile/v2`) — l'enceinte refuse l'écriture (voir ci-dessous)
 - ⏲️ **Minuterie de veille** : extinction automatique après 15 / 30 / 45 / 60 / 90 min
 - 🗒️ **File d'attente** *(best-effort)* : pistes à venir, dans les réglages avancés
 - ⌨️ **Touches média du clavier** : les touches lecture/pause, ⏮/⏭ du Mac pilotent l'enceinte ; la lecture apparaît aussi dans le Centre de contrôle
-- Titre, artiste, pochette et **barre de progression** (temps écoulé / total) en cours de lecture
+- Pochette, puis titre, artiste et album qui **défilent** s'ils sont trop longs (pause au survol), et **barre de progression** (temps écoulé / total) en cours de lecture
 - Mise à jour **temps réel** : abonnement au flux d'évènements de l'enceinte (long-poll), réveil quasi instantané, avec repli sur un sondage périodique
 - 🚀 **Lancement au démarrage** : optionnel, via `SMAppService`
 - Pas d'icône dans le Dock (app accessoire)

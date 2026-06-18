@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct ContentView: View {
@@ -5,6 +6,11 @@ struct ContentView: View {
     @State private var showSettings = false
     @State private var showAdvanced = false
     @State private var manualIP = ""
+
+    /// Largeur fixe du popover et marge intérieure — partagées pour dimensionner les boutons
+    /// de source (carrés qui pavent exactement la largeur disponible).
+    private static let popoverWidth: CGFloat = 340
+    private static let contentPadding: CGFloat = 14
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -16,12 +22,13 @@ struct ContentView: View {
 
             if !state.host.isEmpty {
                 Divider()
+                sourceButtons
                 nowPlayingView
                 notificationsView
                 progressBar
                 transportControls
                 volumeControl
-                sourcePicker
+                volumeReadout
                 Divider()
                 advancedSection
             }
@@ -36,8 +43,8 @@ struct ContentView: View {
             Divider()
             footer
         }
-        .padding(14)
-        .frame(width: 300)
+        .padding(Self.contentPadding)
+        .frame(width: Self.popoverWidth)
         .task {
             await state.refresh()
             state.startEventStream()
@@ -67,31 +74,43 @@ struct ContentView: View {
         }
     }
 
-    // MARK: - Sections
+    // MARK: - En-tête (enceinte, IP, statut, alimentation)
 
     private var header: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 10) {
             Image(systemName: state.isOn ? "hifispeaker.fill" : "hifispeaker")
+                .font(.title3)
                 .foregroundStyle(state.isReachable ? Color.primary : Color.secondary)
 
-            if state.savedSpeakers.count > 1 {
-                speakerSwitcher
-            } else {
-                Text(headerTitle)
-                    .font(.headline)
-                    .lineLimit(1)
+            VStack(alignment: .leading, spacing: 1) {
+                if state.savedSpeakers.count > 1 {
+                    speakerSwitcher
+                } else {
+                    Text(headerTitle)
+                        .font(.headline)
+                        .lineLimit(1)
+                }
+                if !state.host.isEmpty {
+                    Text(state.host)
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.secondary)
+                }
             }
 
             Spacer(minLength: 4)
+
             Circle()
                 .fill(state.isReachable ? Color.green : Color.gray)
                 .frame(width: 8, height: 8)
                 .help(state.isReachable ? "Connectée" : "Injoignable")
-            Button { showSettings.toggle() } label: {
-                Image(systemName: "gearshape")
+
+            // Allumer / éteindre (écrit la source courante ou `standby`).
+            Button { state.togglePower() } label: {
+                Image(systemName: "power")
             }
             .buttonStyle(.borderless)
-            .help("Gérer les enceintes")
+            .foregroundStyle(state.isOn ? Color.accentColor : Color.secondary)
+            .help(state.isOn ? "Éteindre" : "Allumer")
         }
     }
 
@@ -119,6 +138,45 @@ struct ContentView: View {
         .menuStyle(.borderlessButton)
         .fixedSize()
     }
+
+    // MARK: - Sélecteur de source (boutons raccourcis)
+
+    /// Une rangée de boutons-raccourcis **carrés** : la source active est mise en évidence.
+    private var sourceButtons: some View {
+        let spacing: CGFloat = 6
+        let count = CGFloat(Source.selectable.count)
+        // Côté du carré = largeur intérieure moins les espaces, divisée par le nombre de sources.
+        let side = (Self.popoverWidth - Self.contentPadding * 2 - spacing * (count - 1)) / count
+        return HStack(spacing: spacing) {
+            ForEach(Source.selectable) { src in
+                sourceButton(src, side: side)
+            }
+        }
+    }
+
+    private func sourceButton(_ src: Source, side: CGFloat) -> some View {
+        let active = state.isOn && state.source == src
+        return Button { state.select(src) } label: {
+            VStack(spacing: 3) {
+                Image(systemName: src.systemImage)
+                    .font(.system(size: 16))
+                Text(src.shortName)
+                    .font(.system(size: 9, weight: .regular))
+                    .lineLimit(1)
+            }
+            .frame(width: side, height: side)
+            .background(
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(active ? Color.accentColor : Color.secondary.opacity(0.12))
+            )
+            .foregroundStyle(active ? Color.white : Color.primary)
+            .contentShape(RoundedRectangle(cornerRadius: 10))
+        }
+        .buttonStyle(.plain)
+        .help(src.displayName)
+    }
+
+    // MARK: - Réglages / découverte des enceintes
 
     private var settingsSection: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -239,19 +297,21 @@ struct ContentView: View {
         manualIP = ""
     }
 
+    // MARK: - En cours de lecture (pochette + métadonnées défilantes)
+
     private var nowPlayingView: some View {
         HStack(spacing: 10) {
             cover
-            VStack(alignment: .leading, spacing: 2) {
-                Text(state.nowPlaying?.title ?? "—")
-                    .font(.subheadline.weight(.medium))
-                    .lineLimit(1)
-                Text(state.nowPlaying?.artist ?? " ")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+            VStack(alignment: .leading, spacing: 3) {
+                MarqueeText(text: state.nowPlaying?.title ?? "—",
+                            font: .subheadline.weight(.medium))
+                if let artist = state.nowPlaying?.artist, !artist.isEmpty {
+                    MarqueeText(text: artist, font: .caption, color: .secondary)
+                }
+                if let album = state.nowPlaying?.album, !album.isEmpty {
+                    MarqueeText(text: album, font: .caption2, color: .secondary)
+                }
             }
-            Spacer(minLength: 0)
         }
     }
 
@@ -261,7 +321,7 @@ struct ContentView: View {
             Image(nsImage: image)
                 .resizable()
                 .aspectRatio(contentMode: .fill)
-                .frame(width: 44, height: 44)
+                .frame(width: 52, height: 52)
                 .clipShape(RoundedRectangle(cornerRadius: 6))
         } else {
             placeholderCover
@@ -271,7 +331,7 @@ struct ContentView: View {
     private var placeholderCover: some View {
         RoundedRectangle(cornerRadius: 6)
             .fill(Color.secondary.opacity(0.15))
-            .frame(width: 44, height: 44)
+            .frame(width: 52, height: 52)
             .overlay(Image(systemName: "music.note").foregroundStyle(.secondary))
     }
 
@@ -301,8 +361,20 @@ struct ContentView: View {
         return String(format: "%d:%02d", totalSeconds / 60, totalSeconds % 60)
     }
 
+    // MARK: - Transport (boucle à gauche, puis précédent / pause / suivant)
+
     private var transportControls: some View {
         HStack(spacing: 0) {
+            // Bouton « Boucle » (mode de lecture) à gauche. Désactivé hors lecture :
+            // l'enceinte refuse d'écrire le mode sans session active (HTTP 401).
+            Button { state.cyclePlayMode() } label: {
+                Image(systemName: state.playMode.systemImage)
+            }
+            .font(.callout)
+            .foregroundStyle(state.playMode.isActive ? Color.accentColor : Color.secondary)
+            .disabled(state.nowPlaying == nil)
+            .help("Mode de lecture : \(state.playMode.displayName)")
+
             Spacer()
             Button { state.previous() } label: { Image(systemName: "backward.fill") }
             Spacer().frame(width: 26)
@@ -312,55 +384,66 @@ struct ContentView: View {
             Spacer().frame(width: 26)
             Button { state.next() } label: { Image(systemName: "forward.fill") }
             Spacer()
-            // Bouton unique de mode de lecture (répétition / aléatoire). Désactivé hors lecture :
-            // l'enceinte refuse d'écrire le mode sans session active (HTTP 401).
-            Button { state.cyclePlayMode() } label: {
-                Image(systemName: state.playMode.systemImage)
-            }
-            .font(.callout)
-            .foregroundStyle(state.playMode.isActive ? Color.accentColor : Color.secondary)
-            .disabled(state.nowPlaying == nil)
-            .help("Mode de lecture : \(state.playMode.displayName)")
+
+            // Réserve symétrique (même gabarit que le bouton Boucle) pour centrer le trio.
+            Image(systemName: state.playMode.systemImage).font(.callout).opacity(0)
         }
         .font(.title3)
         .buttonStyle(.borderless)
     }
 
+    // MARK: - Volume (barre pleine largeur + lecture/saisie du niveau)
+
+    /// Barre de volume encadrée des boutons − / + (chacun ajuste le niveau de 1).
     private var volumeControl: some View {
-        HStack(spacing: 6) {
-            Button { state.toggleMute() } label: {
-                Image(systemName: state.isMuted ? "speaker.slash.fill" : "speaker.fill")
-            }
-            .buttonStyle(.borderless)
-            Button { state.stepVolume(up: false) } label: { Image(systemName: "minus") }
+        HStack(spacing: 10) {
+            Button { state.nudgeVolume(up: false) } label: { Image(systemName: "minus") }
                 .buttonStyle(.borderless)
                 .disabled(state.volume <= 0)
             Slider(
                 value: Binding(
                     get: { Double(min(state.volume, state.maxVolume)) },
-                    set: { state.setVolume(Int($0)) }
+                    set: { state.setVolume(Int($0.rounded())) }
                 ),
                 in: 0...Double(max(state.maxVolume, 1))
             )
-            Button { state.stepVolume(up: true) } label: { Image(systemName: "plus") }
+            Button { state.nudgeVolume(up: true) } label: { Image(systemName: "plus") }
                 .buttonStyle(.borderless)
                 .disabled(state.volume >= state.maxVolume)
-            Text("\(state.volume)")
-                .font(.caption.monospacedDigit())
-                .frame(width: 26, alignment: .trailing)
         }
     }
 
-    private var sourcePicker: some View {
-        Picker("Source", selection: Binding(
-            get: { state.source },
-            set: { state.select($0) }
-        )) {
-            ForEach(Source.selectable) { src in
-                Label(src.displayName, systemImage: src.systemImage).tag(src)
+    /// Sous la barre : icône haut-parleur (nombre d'ondes selon le niveau, clic = muet) et
+    /// niveau en %, **éditable** (saisie directe + flèches ↑/↓ pour ±1).
+    private var volumeReadout: some View {
+        HStack(spacing: 6) {
+            Button { state.toggleMute() } label: {
+                Image(systemName: volumeSymbol)
+                    .frame(width: 20, alignment: .leading)
             }
+            .buttonStyle(.borderless)
+            .help(state.isMuted ? "Réactiver le son" : "Couper le son")
+
+            VolumeField(value: state.volume, range: 0...max(state.maxVolume, 1)) { newValue in
+                state.setVolume(newValue)
+            }
+            .frame(width: 30, height: 18)
+            Text("%")
+                .foregroundStyle(.secondary)
+            Spacer()
         }
-        .pickerStyle(.menu)
+        .font(.callout.monospacedDigit())
+    }
+
+    /// Icône haut-parleur : muet, ou 1 à 3 ondes selon le niveau relatif au plafond.
+    private var volumeSymbol: String {
+        guard !state.isMuted else { return "speaker.slash.fill" }
+        let fraction = state.maxVolume > 0 ? Double(state.volume) / Double(state.maxVolume) : 0
+        switch fraction {
+        case ..<0.34: return "speaker.wave.1.fill"
+        case ..<0.67: return "speaker.wave.2.fill"
+        default:      return "speaker.wave.3.fill"
+        }
     }
 
     /// Notifications affichées par l'enceinte (best-effort — souvent vide). Masqué si rien.
@@ -493,20 +576,183 @@ struct ContentView: View {
         return formatter.string(from: date)
     }
 
+    // MARK: - Pied : paramètres + quitter
+
     private var footer: some View {
         HStack {
-            Button {
-                state.togglePower()
-            } label: {
-                Label(state.isOn ? "Éteindre" : "Allumer",
-                      systemImage: "power")
+            Button { showSettings.toggle() } label: {
+                Label("Paramètres", systemImage: "gearshape")
             }
             .buttonStyle(.borderless)
+            .help("Gérer les enceintes")
 
             Spacer()
 
             Button("Quitter") { NSApplication.shared.terminate(nil) }
                 .buttonStyle(.borderless)
+        }
+    }
+}
+
+// MARK: - Texte défilant (marquee)
+
+/// Texte sur une seule ligne qui **défile** horizontalement quand il dépasse la largeur
+/// disponible ; sous cette largeur il reste fixe. Survoler le texte **met le défilement en
+/// pause** là où il en est. Deux copies espacées de `gap` assurent une boucle sans couture.
+struct MarqueeText: View {
+    let text: String
+    var font: Font = .body
+    var color: Color = .primary
+
+    @State private var textWidth: CGFloat = 0
+    @State private var containerWidth: CGFloat = 0
+    @State private var offset: CGFloat = 0
+    @State private var hovering = false
+    @State private var ticker = Timer.publish(every: 0.02, on: .main, in: .common).autoconnect()
+
+    private let speed: CGFloat = 30   // points par seconde
+    private let gap: CGFloat = 44     // écart entre les deux copies
+
+    /// On ne fait défiler **que si** le texte dépasse réellement la largeur disponible, et
+    /// seulement une fois cette largeur connue (`containerWidth > 0`) — sinon un premier rendu
+    /// mesurant le texte avant le conteneur déclencherait un faux défilement.
+    private var needsScroll: Bool { containerWidth > 0 && textWidth > containerWidth + 2 }
+
+    var body: some View {
+        Group {
+            if needsScroll {
+                HStack(spacing: gap) {
+                    Text(text).fixedSize()
+                    Text(text).fixedSize()
+                }
+                .offset(x: -offset)
+                .frame(width: containerWidth, alignment: .leading)
+                .clipped()
+            } else {
+                Text(text)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .font(font)
+        .foregroundStyle(color)
+        .lineLimit(1)
+        // Largeur réellement disponible (mesurée quel que soit le contenu affiché).
+        .background(
+            GeometryReader { geo in
+                Color.clear
+                    .onAppear { containerWidth = geo.size.width }
+                    .onChange(of: geo.size.width) { containerWidth = $0 }
+            }
+        )
+        // Largeur réelle du texte, mesurée à part (copie cachée, jamais tronquée).
+        .background(
+            Text(text)
+                .font(font)
+                .lineLimit(1)
+                .fixedSize()
+                .hidden()
+                .background(
+                    GeometryReader { geo in
+                        Color.clear
+                            .onAppear { textWidth = geo.size.width }
+                            .onChange(of: geo.size.width) { textWidth = $0 }
+                    }
+                ),
+            alignment: .leading
+        )
+        .onHover { hovering = $0 }
+        .onReceive(ticker) { _ in
+            guard needsScroll, !hovering else { return }
+            offset += speed * 0.02
+            let span = textWidth + gap
+            if span > 0, offset >= span { offset -= span }
+        }
+        .onChange(of: text) { _ in offset = 0 }
+    }
+}
+
+// MARK: - Champ de saisie du volume (%)
+
+/// Champ numérique du volume en % : saisie directe au clavier, **flèches ↑/↓ pour ±1**, et
+/// validation à la touche Entrée ou à la perte du focus. Réalisé en `NSTextField` car les
+/// raccourcis clavier SwiftUI (`onKeyPress`) n'existent qu'à partir de macOS 14, or la cible
+/// est macOS 13. La saisie n'est jamais écrasée par les rafraîchissements pendant l'édition.
+struct VolumeField: NSViewRepresentable {
+    let value: Int
+    let range: ClosedRange<Int>
+    let onCommit: (Int) -> Void
+
+    func makeNSView(context: Context) -> NSTextField {
+        let field = NSTextField()
+        field.delegate = context.coordinator
+        field.alignment = .right
+        field.isBordered = false
+        field.drawsBackground = false
+        field.focusRingType = .none
+        field.usesSingleLineMode = true
+        field.cell?.wraps = false
+        field.cell?.isScrollable = true
+        field.font = .monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+        field.stringValue = String(value)
+        return field
+    }
+
+    func updateNSView(_ field: NSTextField, context: Context) {
+        context.coordinator.parent = self
+        // On ne resynchronise l'affichage que **hors édition**, pour ne pas écraser la saisie.
+        if field.currentEditor() == nil {
+            let s = String(value)
+            if field.stringValue != s { field.stringValue = s }
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var parent: VolumeField
+        init(_ parent: VolumeField) { self.parent = parent }
+
+        private func clamped(_ v: Int) -> Int {
+            min(parent.range.upperBound, max(parent.range.lowerBound, v))
+        }
+
+        /// Intercepte les flèches ↑/↓ (±1) et la touche Entrée (validation) du champ.
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy sel: Selector) -> Bool {
+            switch sel {
+            case #selector(NSResponder.moveUp(_:)):
+                bump(+1, in: textView); return true
+            case #selector(NSResponder.moveDown(_:)):
+                bump(-1, in: textView); return true
+            case #selector(NSResponder.insertNewline(_:)):
+                // Fin d'édition ⇒ `controlTextDidEndEditing` valide et resynchronise.
+                control.window?.makeFirstResponder(nil)
+                return true
+            default:
+                return false
+            }
+        }
+
+        /// Valide la saisie (Entrée ou perte de focus) : une valeur correcte est bornée et
+        /// envoyée ; une entrée vide/invalide est restaurée à la valeur courante.
+        func controlTextDidEndEditing(_ obj: Notification) {
+            guard let field = obj.object as? NSTextField else { return }
+            let digits = field.stringValue.filter(\.isNumber)
+            if let n = Int(digits) {
+                let value = clamped(n)
+                field.stringValue = String(value)
+                parent.onCommit(value)
+            } else {
+                field.stringValue = String(parent.value)
+            }
+        }
+
+        /// Flèches ↑/↓ : ajuste de `delta`, met à jour l'affichage et envoie aussitôt.
+        private func bump(_ delta: Int, in textView: NSTextView) {
+            let current = Int(textView.string.filter(\.isNumber)) ?? parent.value
+            let next = clamped(current + delta)
+            textView.string = String(next)
+            textView.setSelectedRange(NSRange(location: textView.string.count, length: 0))
+            parent.onCommit(next)
         }
     }
 }

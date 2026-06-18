@@ -52,8 +52,6 @@ final class AppState: ObservableObject {
     @Published private(set) var playMode: PlayMode = .normal
     /// Volume maximum autorisé (plafond réglé sur l'enceinte) : borne haute du slider.
     @Published private(set) var maxVolume: Int = 100
-    /// Pas des boutons −/+ de volume.
-    @Published private(set) var volumeStep: Int = 5
 
     /// Réglages DSP (miroirs **lecture seule** du profil `kef:eqProfile/v2`). L'écriture est
     /// refusée par l'enceinte (HTTP 401) — on affiche le profil sans le modifier. `eqAvailable`
@@ -270,6 +268,8 @@ final class AppState: ObservableObject {
     func setVolume(_ value: Int) {
         // Borne haute = plafond réglé sur l'enceinte (`maxVolume`, 100 par défaut).
         let clamped = max(0, min(maxVolume, value))
+        // Bref retour haptique à chaque cran franchi (drag, boutons −/+, muet).
+        if clamped != volume { Self.hapticTick() }
         if clamped > 0 { previousVolume = clamped }
         volume = clamped
         volumeSendTask?.cancel()
@@ -282,6 +282,12 @@ final class AppState: ObservableObject {
 
     func toggleMute() {
         setVolume(isMuted ? max(previousVolume, 10) : 0)
+    }
+
+    /// Retour haptique (trackpad Force Touch) joué à chaque cran de volume franchi.
+    /// Silencieux sur un Mac sans trackpad haptique. À jouer sur le thread principal (on y est).
+    private static func hapticTick() {
+        NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
     }
 
     // MARK: - Alimentation & source
@@ -344,9 +350,9 @@ final class AppState: ObservableObject {
 
     // MARK: - Boutons de volume −/+
 
-    /// Monte/descend le volume d'un `volumeStep` (borné à `maxVolume` par `setVolume`).
-    func stepVolume(up: Bool) {
-        setVolume(volume + (up ? volumeStep : -volumeStep))
+    /// Monte/descend le volume **de 1** (borné à `maxVolume` par `setVolume`).
+    func nudgeVolume(up: Bool) {
+        setVolume(volume + (up ? 1 : -1))
     }
 
     // MARK: - Configuration peu changeante (plafond volume + DSP), lue une fois par enceinte
@@ -358,7 +364,6 @@ final class AppState: ObservableObject {
         if !volumeConfigLoaded {
             volumeConfigLoaded = true
             if let m = try? await client.maximumVolume(), (1...100).contains(m) { maxVolume = m }
-            if let s = try? await client.volumeStep(), (1...50).contains(s) { volumeStep = s }
             if volume > maxVolume { volume = maxVolume }
         }
         if !eqLoaded {
@@ -477,7 +482,6 @@ final class AppState: ObservableObject {
         volumeConfigLoaded = false
         eqLoaded = false
         maxVolume = 100
-        volumeStep = 5
         playMode = .normal
         eqAvailable = false
         eqProfileName = nil

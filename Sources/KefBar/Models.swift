@@ -34,6 +34,19 @@ enum Source: String, CaseIterable, Identifiable, Hashable {
         }
     }
 
+    /// Libellé court pour les boutons-raccourcis de source (l'infobulle garde `displayName`).
+    var shortName: String {
+        switch self {
+        case .wifi:      return "Wi-Fi"
+        case .bluetooth: return "Bluetooth"
+        case .tv:        return "TV/HDMI"
+        case .optic:     return "Optique"
+        case .coaxial:   return "Coaxial"
+        case .analog:    return "Aux"
+        case .standby:   return "Veille"
+        }
+    }
+
     var systemImage: String {
         switch self {
         case .wifi:      return "wifi"

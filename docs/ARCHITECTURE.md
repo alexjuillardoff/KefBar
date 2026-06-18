@@ -47,7 +47,7 @@ des callbacks (touches → actions).
 | [`AppState.swift`](../Sources/KefBar/AppState.swift) | `@MainActor ObservableObject` : état `@Published`, orchestration async, polling, debounce, **liste d'enceintes** + scan, persistance (IP active + enceintes). Détient le `NowPlayingCenter`. |
 | [`NowPlayingCenter.swift`](../Sources/KefBar/NowPlayingCenter.swift) | `@MainActor`. Pont vers **MediaPlayer** : reçoit les **touches média** physiques (`MPRemoteCommandCenter`) et publie la lecture en cours (`MPNowPlayingInfoCenter`) — ce qui fait de l'app l'application « En cours de lecture » du système, condition pour recevoir ces touches. Aucune dépendance UI/réseau. |
 | [`Models.swift`](../Sources/KefBar/Models.swift) | `Source` (enum + libellés FR + SF Symbols), `Speaker` (enceinte connue, identité par MAC), `PlayMode` (cycle répétition/aléatoire), `QueueItem`, `NowPlaying`, `KefError`. |
-| [`ContentView.swift`](../Sources/KefBar/ContentView.swift) | UI déclarative : en-tête/statut, réglages IP + lancement au démarrage, now-playing, transport (+ mode de lecture), slider (+ −/+), picker, **réglages avancés** (DSP, minuterie de veille, file d'attente), footer. |
+| [`ContentView.swift`](../Sources/KefBar/ContentView.swift) | UI déclarative : en-tête (enceinte, IP, point d'état, bouton allumer/éteindre), réglages IP + lancement au démarrage, **sélecteur de source en boutons-raccourcis carrés** (icône + libellé `shortName`, taille calculée pour paver la largeur), now-playing (pochette + titre/artiste/album **défilants**, pause au survol — `MarqueeText`), barre de progression, transport (Boucle à gauche, puis précédent/pause/suivant), volume (slider pleine largeur + boutons −/+ par pas de 1, puis icône haut-parleur/muet + niveau **en % éditable** au clavier — `VolumeField`), **réglages avancés** (DSP, minuterie de veille, file d'attente), pied (Paramètres + Quitter). Inclut les vues utilitaires `MarqueeText` (défilement avec pause au survol) et `VolumeField` (`NSTextField` : saisie du %, flèches ↑/↓ pour ±1). |
 | [`KefBarApp.swift`](../Sources/KefBar/KefBarApp.swift) | `@main`, `MenuBarExtra(.window)`, `AppDelegate → setActivationPolicy(.accessory)`. |
 
 ## 3. Surface d'API
@@ -103,7 +103,7 @@ des callbacks (touches → actions).
 | `lastError` | `String?` | `private(set)` |
 | `isMuted` | `Bool` | calculé : `volume == 0` |
 | `playMode` | `PlayMode` | `private(set)` — répétition / aléatoire |
-| `maxVolume` / `volumeStep` | `Int` | `private(set)` — plafond du slider · pas des boutons −/+ |
+| `maxVolume` | `Int` | `private(set)` — plafond du slider (les boutons −/+ vont par pas de 1) |
 | `eqAvailable`, `eqDeskMode`, `eqWallMode`, `eqPhaseCorrection`, `eqHighPassMode`, `eqSubwooferOut` | `Bool` | `private(set)` — miroirs DSP **lecture seule** |
 | `eqProfileName` | `String?` | `private(set)` — nom du profil DSP |
 | `eqBassExtension` / `eqTrebleAmount` | `String` / `Int` | `private(set)` — graves (`standard`/`less`/`extra`) · aigus |
@@ -119,12 +119,12 @@ de persistance : `"kef.host"` + `"kef.speakers"` (UserDefaults). `launchAtLogin`
 persisté dans UserDefaults : il **reflète** l'état réel du login item (`SMAppService.mainApp.status`).
 
 Actions : `refresh()`, `startEventStream()`, `stopEventStream()`, `startPositionTicker()`,
-`stopPositionTicker()`, `setVolume(_:)`, `stepVolume(up:)`, `toggleMute()`, `togglePower()`,
+`stopPositionTicker()`, `setVolume(_:)`, `nudgeVolume(up:)` (±1), `toggleMute()`, `togglePower()`,
 `select(_:)`, `playPause()`, `next()`, `previous()`, `cyclePlayMode()`, `refreshEQ()` (lecture
 seule), `refreshQueue()`, `refreshNotifications()`, `startSleepTimer(minutes:)`,
 `cancelSleepTimer()`.
 
-> **Configuration peu changeante** (plafond de volume, pas, profil DSP) : lue **une seule fois
+> **Configuration peu changeante** (plafond de volume, profil DSP) : lue **une seule fois
 > par enceinte** en fin de `refresh()` (`loadSpeakerConfigIfNeeded()`, drapeaux
 > `volumeConfigLoaded`/`eqLoaded` remis à zéro au changement d'`host` par `resetPerSpeakerState()`).
 > File d'attente et notifications : chargées **à la demande** (ouverture du panneau « Réglages
@@ -169,7 +169,7 @@ refresh()
         ▼
    met à jour les @Published ⇒ SwiftUI redessine
         ▼
-   loadSpeakerConfigIfNeeded()  ⇒ 1ʳᵉ fois/enceinte : maxVolume, volumeStep, eqProfile
+   loadSpeakerConfigIfNeeded()  ⇒ 1ʳᵉ fois/enceinte : maxVolume, eqProfile
         ▼
    nowPlayingCenter.update(nowPlaying:isOn:) ⇒ Now Playing macOS + touches média
 ```
@@ -196,10 +196,16 @@ Slider/Bouton ─▶ AppState.<action>()
 ### Anti-rebond du volume (150 ms)
 
 `setVolume(_:)` :
-1. clamp 0–100 ; si > 0, met à jour `previousVolume` ;
-2. écrit `volume` **immédiatement** (l'UI suit le doigt sans latence réseau) ;
-3. **annule** la `volumeSendTask` précédente, en programme une nouvelle qui `sleep(150 ms)`
+1. clamp 0–100 ; si le cran change, joue un **retour haptique** (`hapticTick()`,
+   `NSHapticFeedbackManager` motif `.levelChange` — silencieux sans trackpad Force Touch) ;
+2. si > 0, met à jour `previousVolume` ;
+3. écrit `volume` **immédiatement** (l'UI suit le doigt sans latence réseau) ;
+4. **annule** la `volumeSendTask` précédente, en programme une nouvelle qui `sleep(150 ms)`
    puis envoie `client.setVolume`.
+
+> Le haptique ne se déclenche qu'au changement effectif de cran : il accompagne le drag du
+> slider et les boutons −/+ / muet (qui passent tous par `setVolume`), pas les mises à jour
+> issues du rafraîchissement (qui écrivent `volume` directement).
 
 Effet : un drag qui émet 40 valeurs/s ne déclenche **qu'une** requête HTTP, ~150 ms après
 l'arrêt du geste.
@@ -424,7 +430,7 @@ Détail complet et confiance par point : [VERIFICATION.md](VERIFICATION.md#3-ce-
 | ~~**Découverte auto**~~ ✅ | Fait — [`Discovery.swift`](../Sources/KefBar/Discovery.swift) scanne le LAN via sondes HTTP (plus fiable que Bonjour : ne remonte **que** des KEF). |
 | ~~**Touches média (lecture)**~~ ✅ | Fait — [`NowPlayingCenter.swift`](../Sources/KefBar/NowPlayingCenter.swift) : play/pause, ⏮, ⏭ via le clavier (framework MediaPlayer, sans permission). |
 | ~~**Mode de lecture (repeat/shuffle)**~~ ✅ | Fait — `cyclePlayMode()` (`settings:/mediaPlayer/playMode`), bouton unique dans le transport ([PROTOCOL A.11](PROTOCOL.md#a11-mode-de-lecture-file-dattente--notifications)). |
-| ~~**Limite de volume**~~ ✅ | Fait — `maximumVolume()` borne le slider, `volumeStep()` cale les boutons −/+. |
+| ~~**Limite de volume**~~ ✅ | Fait — `maximumVolume()` borne le slider (les boutons −/+ vont par pas de 1). |
 | **DSP/EQ** ✅ lecture / ❌ écriture | Fait en **lecture seule** — affichage du profil (`kef:eqProfile/v2`). L'écriture est refusée (HTTP 401) : reste à rétro-ingénierier le mécanisme de KEF Connect ([PROTOCOL A.12](PROTOCOL.md#a12-dsp--profil-eq--kefeqprofilev2-lecture-seule)). |
 | ~~**Minuterie de veille**~~ ✅ | Fait — `startSleepTimer(minutes:)` programme un `powerOff()` différé (côté app). |
 | ~~**File d'attente**~~ ✅ | Fait (best-effort) — `playQueue()` (`playlists:pq/getitems`, `rows`), liste dans les réglages avancés. |
