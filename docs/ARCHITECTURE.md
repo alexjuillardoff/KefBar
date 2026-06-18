@@ -68,8 +68,11 @@ des callbacks (touches → actions).
 | Éteindre | `powerOff() async throws` | `setSource(.standby)` |
 | Allumer | `powerOn(_ source: Source = .wifi) async throws` | `setSource(source)` |
 | Transport | `playPause()`, `next()`, `previous()` `async throws` | `player:player/control` (`roles=activate`) |
-| Now-playing | `nowPlaying() async throws -> NowPlaying?` | `player:player/data` |
+| Now-playing | `nowPlaying() async throws -> NowPlaying?` | `player:player/data` (titre/artiste/album/pochette + **durée** best-effort) |
+| Position | `playPosition() async throws -> Int` | `player:player/data/playTime` (`i64_`, ms) |
 | Nom appareil | `deviceName() async throws -> String?` | `settings:/deviceName` |
+| Évènements (s'abonner) | `subscribeToEvents() async throws -> String` | `POST /api/event/modifyQueue` → UUID de file |
+| Évènements (attendre) | `pollEvents(queueId:timeout:) async throws -> Bool` | `GET /api/event/pollQueue` (long-poll) |
 
 ### `AppState` (@MainActor ObservableObject)
 
@@ -83,15 +86,17 @@ des callbacks (touches → actions).
 | `volume` | `Int` | lecture/écriture |
 | `source` | `Source` | `private(set)` |
 | `nowPlaying` | `NowPlaying?` | `private(set)` |
+| `positionMs` | `Int` | `private(set)` — position de lecture (ms) |
 | `deviceName` | `String?` | `private(set)` |
 | `lastError` | `String?` | `private(set)` |
 | `isMuted` | `Bool` | calculé : `volume == 0` |
 
 État privé : `client: KefClient?`, `lastSource: Source`, `previousVolume: Int = 20`,
-`pollTask`, `volumeSendTask`. Clé de persistance : `"kef.host"` (UserDefaults).
+`eventTask`, `positionTask`, `volumeSendTask`. Clé de persistance : `"kef.host"` (UserDefaults).
 
-Actions : `refresh()`, `startPolling(every:)`, `stopPolling()`, `setVolume(_:)`,
-`toggleMute()`, `togglePower()`, `select(_:)`, `playPause()`, `next()`, `previous()`.
+Actions : `refresh()`, `startEventStream()`, `stopEventStream()`, `startPositionTicker()`,
+`stopPositionTicker()`, `setVolume(_:)`, `toggleMute()`, `togglePower()`, `select(_:)`,
+`playPause()`, `next()`, `previous()`.
 
 ### `NowPlayingCenter` (@MainActor, détenu par `AppState`)
 
@@ -190,14 +195,26 @@ restauration), indépendant du firmware (cf. [PROTOCOL A.6](PROTOCOL.md#a6-mute-
 - `togglePower()` : si allumé → `powerOff()` ; sinon → `powerOn(lastSource)` puis `source = lastSource`.
 - Toute action se termine par `await refresh()` pour resynchroniser l'état réel.
 
-### Cycle de vie du polling
+### Cycle de vie du suivi d'état (push temps réel + ticker de position)
 
-`ContentView` : `.task { await state.refresh(); state.startPolling() }` à l'ouverture du menu,
-`.onDisappear { state.stopPolling() }` à la fermeture. `startPolling(every: 3)` boucle
-`sleep(3 s)` + `refresh()` dans une `Task` annulable ; `stopPolling()` l'annule.
+`ContentView` : `.task { await state.refresh(); state.startEventStream(); state.startPositionTicker() }`
+à l'ouverture du menu, `.onDisappear { state.stopEventStream(); state.stopPositionTicker() }` à la
+fermeture.
+
+- **Flux d'évènements** (`startEventStream`) : `runEventLoop()` s'abonne via
+  `subscribeToEvents()` ([PROTOCOL A.8](PROTOCOL.md#a8-push-temps-réel-long-poll)) puis enchaîne
+  des long-polls `pollEvents(queueId:timeout: 10)`. Chaque retour — changement signalé **ou**
+  expiration du délai — déclenche un `refresh()` qui relit les valeurs faisant foi (modèle
+  **hybride** : l'évènement réveille, les accesseurs typés font foi). Réveil quasi instantané sur
+  changement de volume/piste, et nettement moins de trafic qu'un sondage 3 s. En cas d'échec
+  (firmware sans évènements, file expirée, enceinte injoignable) on rafraîchit quand même puis on
+  retente — **repli équivalent à un polling périodique**. Boucle annulable ; un changement de
+  `host` la relance pour s'abonner à la nouvelle enceinte.
+- **Ticker de position** (`startPositionTicker`) : toutes les secondes, tant que ça joue, relit
+  `playPosition()` pour la barre de progression et pousse la position au `NowPlayingCenter`.
 
 > Conséquence : l'état n'est rafraîchi **que menu ouvert**. Pour que l'icône reflète l'état
-> menu fermé, il faudrait un polling permanent (léger) — voir §9.
+> menu fermé, il faudrait un suivi permanent (léger) — voir §9.
 
 ### Touches média du clavier & « En cours de lecture » ([`NowPlayingCenter.swift`](../Sources/KefBar/NowPlayingCenter.swift))
 
@@ -209,11 +226,14 @@ et captureraient les touches des autres apps) :
 1. `MPRemoteCommandCenter.shared()` : on s'abonne aux commandes `togglePlayPause`, `play`,
    `pause`, `nextTrack`, `previousTrack`. Les handlers re-sautent sur le main actor
    (`Task { @MainActor in … }`) et appellent les callbacks branchés par `AppState`. Les
-   commandes inutiles (seek/skip/position) sont **désactivées**.
-2. `MPNowPlayingInfoCenter.default()` : `update(nowPlaying:isOn:)` y publie titre/artiste/
-   album + pochette et fixe `playbackState` (`.playing`/`.paused`). **C'est cette publication
-   qui fait de KefBar l'application « En cours de lecture » du système** — condition pour que
-   macOS lui route les touches média.
+   commandes seek/skip sont **désactivées** ; `changePlaybackPositionCommand` l'est aussi (on
+   **affiche** la position mais l'API KEF n'offre pas de seek → barre en lecture seule).
+2. `MPNowPlayingInfoCenter.default()` : `update(nowPlaying:isOn:elapsed:)` y publie titre/artiste/
+   album + pochette, la **durée** et la **position** (avec le débit de lecture, macOS interpole
+   la barre de progression sans rafraîchissement continu), et fixe `playbackState`
+   (`.playing`/`.paused`). `updatePosition(elapsed:isPlaying:)` met à jour la seule position pour
+   le ticker. **C'est cette publication qui fait de KefBar l'application « En cours de lecture »
+   du système** — condition pour que macOS lui route les touches média.
 
 ```
 enceinte joue  ──refresh──▶ update(np, isOn:true)  ──▶ playbackState=.playing/.paused
@@ -231,7 +251,7 @@ Détails :
   lecture), on rend les touches aux autres apps. Une seule app système peut posséder les
   touches média à la fois.
 - **Pochette en best-effort.** Téléchargée en tâche annulable, rechargée **seulement** quand
-  l'URL change (`publishedArtworkURL`) — sinon le sondage 3 s la rechargerait sans cesse.
+  l'URL change (`publishedArtworkURL`) — sinon chaque rafraîchissement la rechargerait sans cesse.
 - **Bundle obligatoire.** L'intégration MediaPlayer exige un `CFBundleIdentifier` : elle ne
   fonctionne **que** depuis `KefBar.app`, pas en `swift run` (cf. §8).
 
@@ -330,8 +350,9 @@ Détail complet et confiance par point : [VERIFICATION.md](VERIFICATION.md#3-ce-
 
 | Évolution | Où / comment |
 |---|---|
-| **Lectures parallèles** | Dans `refresh()`, remplacer les 5 `await` séquentiels par `async let` + `await` groupé. |
-| **Push temps réel** | Remplacer le polling par `modifyQueue`/`pollQueue` ([PROTOCOL A.8](PROTOCOL.md#a8-push-temps-réel-long-poll--non-implémenté-dans-kefbar)) ; nouvelle méthode `KefClient.poll(...)`. |
+| **Lectures parallèles** | Dans `refresh()`, remplacer les 6 `await` séquentiels par `async let` + `await` groupé. |
+| ~~**Push temps réel**~~ ✅ | Fait — `runEventLoop()` s'abonne (`modifyQueue`) et enchaîne les long-polls (`pollQueue`) via `KefClient.subscribeToEvents()`/`pollEvents(...)` ([PROTOCOL A.8](PROTOCOL.md#a8-push-temps-réel-long-poll)). Repli polling si indisponible. |
+| ~~**Position / progression**~~ ✅ | Fait — `playPosition()` (`playTime`) + durée du now-playing → barre de progression et position « En cours » macOS. |
 | ~~**Multi-enceintes**~~ ✅ | Fait — `AppState.savedSpeakers: [Speaker]` + IP active, sélecteur dans l'en-tête. |
 | ~~**Découverte auto**~~ ✅ | Fait — [`Discovery.swift`](../Sources/KefBar/Discovery.swift) scanne le LAN via sondes HTTP (plus fiable que Bonjour : ne remonte **que** des KEF). |
 | ~~**Touches média (lecture)**~~ ✅ | Fait — [`NowPlayingCenter.swift`](../Sources/KefBar/NowPlayingCenter.swift) : play/pause, ⏮, ⏭ via le clavier (framework MediaPlayer, sans permission). |

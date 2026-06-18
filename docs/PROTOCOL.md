@@ -110,6 +110,7 @@ Toute lecture renvoie un **tableau JSON à un seul élément**, dont l'objet por
 | **Mute** | `settings:/mediaPlayer/mute` | `value` | `bool_` |
 | **Transport** | `player:player/control` | **`activate`** | `{"control":"pause"\|"next"\|"previous"}` |
 | **Lecture en cours** | `player:player/data` | `value` | objet imbriqué (voir A.5) |
+| **Position de lecture** | `player:player/data/playTime` | `value` | `i64_` en ms (voir A.5) |
 | Mode lecture (repeat/shuffle) | `settings:/mediaPlayer/playMode` | `value` | — |
 | Volume max | `settings:/kef/host/maximumVolume` | `value` | `i32_` (lecture) |
 | Limite de volume | `settings:/kef/host/volumeLimit` | `value` | `i32_` (lecture) |
@@ -186,7 +187,18 @@ Correspondance de parsing (`pykefcontrol`) :
 | En lecture ? | `state == "playing"` |
 
 Position / durée : `player:player/data/playTime` renvoie un `i64_` en **millisecondes** ;
-un champ de durée accompagne la métadonnée.
+un champ de durée accompagne la métadonnée. **KefBar** lit la position via
+[`KefClient.playPosition()`](../Sources/KefBar/KefClient.swift) et extrait la durée dans
+`nowPlaying()` de façon défensive : `status.duration` → `metaData.duration` →
+`mediaData.activeResource.duration` → `mediaData.resources[0].duration` (best-effort,
+l'emplacement dépend du service).
+
+> **Vérifié sur matériel (LSX II, source Wi-Fi / TIDAL Connect)** : la durée fiable est
+> `status.duration` (ms, p.ex. `210346`) ; `metaData` **ne contient pas** de `duration` pour
+> TIDAL — elle est dans `status`, `mediaData.activeResource` et chaque `mediaData.resources[]`.
+> À noter : la charge utile contient des **échappements non standard** (`\?`, `\=` dans
+> `prePlayPath`/`context`) ; `JSONSerialization` (Foundation) les tolère, mais des parseurs
+> stricts (p.ex. `jq`) les rejettent.
 
 > **KefBar** parse `title`, `artist`, `album`, `icon`, `state` de façon défensive
 > (cf. [`KefClient.nowPlaying()`](../Sources/KefBar/KefClient.swift)). C'est le point le plus
@@ -221,9 +233,14 @@ un champ de durée accompagne la métadonnée.
 > `m-lange` montre une forme étendue de commande de transport :
 > `{"control":"<cmd>", "<type>":"<value>"}` pour les commandes paramétrées.
 
-## A.8 Push temps réel (long-poll) — *non implémenté dans KefBar*
+## A.8 Push temps réel (long-poll)
 
-Alternative au polling : s'abonner aux changements d'état.
+Alternative au polling : s'abonner aux changements d'état. **Implémenté par KefBar**
+(`KefClient.subscribeToEvents()` / `pollEvents(queueId:timeout:)`, orchestré par
+`AppState.runEventLoop()` — cf. [ARCHITECTURE.md](ARCHITECTURE.md)). KefBar emploie un modèle
+**hybride** : l'évènement sert de signal de réveil, puis les valeurs faisant foi sont relues via
+les accesseurs typés (robuste vis-à-vis de la forme exacte des éléments renvoyés). Repli sur un
+rafraîchissement périodique si les évènements échouent (firmware ancien, file expirée).
 
 1. **S'abonner** — `POST http://<ip>/api/event/modifyQueue`, body exact observé :
    ```json

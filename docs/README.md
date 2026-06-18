@@ -49,7 +49,7 @@ KefBar/
 ├── Sources/KefBar/
 │   ├── KefBarApp.swift        # point d'entrée : MenuBarExtra + app accessoire
 │   ├── ContentView.swift      # UI du menu (slider, transport, sources, power)
-│   ├── AppState.swift         # état observable + actions + polling
+│   ├── AppState.swift         # état observable + actions + flux d'évènements temps réel
 │   ├── NowPlayingCenter.swift # touches média clavier + « En cours de lecture » macOS
 │   ├── KefClient.swift        # couche réseau : LE protocole KEF
 │   └── Models.swift           # Source, NowPlaying, erreurs

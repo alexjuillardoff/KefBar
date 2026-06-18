@@ -10,7 +10,14 @@ final class AppState: ObservableObject {
         didSet {
             UserDefaults.standard.set(host, forKey: Self.hostKey)
             client = host.isEmpty ? nil : KefClient(host: host)
-            Task { await refresh() }
+            positionMs = 0
+            // Si le flux d'évènements tourne, on le relance pour s'abonner à la nouvelle
+            // enceinte (le ré-abonnement déclenche un rafraîchissement). Sinon, simple refresh.
+            if eventTask != nil {
+                startEventStream()
+            } else {
+                Task { await refresh() }
+            }
         }
     }
 
@@ -30,6 +37,8 @@ final class AppState: ObservableObject {
     @Published var volume: Int = 0
     @Published private(set) var source: Source = .wifi
     @Published private(set) var nowPlaying: NowPlaying?
+    /// Position de lecture courante en millisecondes (alimente la barre de progression).
+    @Published private(set) var positionMs: Int = 0
     @Published private(set) var deviceName: String?
     @Published private(set) var lastError: String?
 
@@ -43,7 +52,8 @@ final class AppState: ObservableObject {
     private var client: KefClient?
     private var lastSource: Source = .wifi
     private var previousVolume: Int = 20
-    private var pollTask: Task<Void, Never>?
+    private var eventTask: Task<Void, Never>?
+    private var positionTask: Task<Void, Never>?
     private var volumeSendTask: Task<Void, Never>?
 
     /// Touches média du clavier + intégration « En cours de lecture » de macOS.
@@ -83,39 +93,98 @@ final class AppState: ObservableObject {
             let src = try await client.currentSource()
             let np = try? await client.nowPlaying()
             let name = try? await client.deviceName()
+            let pos = try? await client.playPosition()
 
+            let trackChanged = np?.title != nowPlaying?.title
             isOn = on
             volume = vol
             if vol > 0 { previousVolume = vol }
             if src != .standby { source = src; lastSource = src }
             nowPlaying = np
+            // Position : on prend la valeur lue ; à défaut on remet à zéro au changement de piste.
+            if let pos { positionMs = pos } else if trackChanged { positionMs = 0 }
             if let name {
                 deviceName = name
                 updateActiveSpeakerName(name)
             }
             isReachable = true
             lastError = nil
-            nowPlayingCenter.update(nowPlaying: np, isOn: on)
+            nowPlayingCenter.update(nowPlaying: np, isOn: on,
+                                    elapsed: pos.map { TimeInterval($0) / 1000 })
         } catch {
             isReachable = false
             report(error)
         }
     }
 
-    func startPolling(every seconds: UInt64 = 3) {
-        stopPolling()
-        pollTask = Task { [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: seconds * 1_000_000_000)
-                if Task.isCancelled { break }
-                await self?.refresh()
+    // MARK: - Flux d'évènements temps réel (long-poll)
+
+    /// Démarre le suivi de l'enceinte par **push** : on s'abonne aux changements et on attend
+    /// (long-poll) qu'ils surviennent, au lieu de sonder toutes les 3 s. Réveil quasi instantané
+    /// sur changement de volume/piste, et beaucoup moins de trafic réseau.
+    func startEventStream() {
+        stopEventStream()
+        eventTask = Task { [weak self] in await self?.runEventLoop() }
+    }
+
+    func stopEventStream() {
+        eventTask?.cancel()
+        eventTask = nil
+    }
+
+    /// Boucle : s'abonne, puis enchaîne les long-polls. Chaque retour (changement signalé **ou**
+    /// expiration du délai) déclenche un `refresh()` qui relit les valeurs faisant foi. En cas
+    /// d'échec (firmware sans évènements, file expirée, enceinte injoignable), on rafraîchit
+    /// quand même puis on retente — ce repli équivaut à un polling périodique.
+    private func runEventLoop() async {
+        while !Task.isCancelled {
+            guard let client else {
+                await refresh()
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                continue
+            }
+            do {
+                let queueId = try await client.subscribeToEvents()
+                await refresh()
+                while !Task.isCancelled {
+                    _ = try await client.pollEvents(queueId: queueId, timeout: 10)
+                    if Task.isCancelled { return }
+                    await refresh()
+                }
+            } catch is CancellationError {
+                return
+            } catch {
+                if Task.isCancelled { return }
+                isReachable = false
+                await refresh()
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
             }
         }
     }
 
-    func stopPolling() {
-        pollTask?.cancel()
-        pollTask = nil
+    // MARK: - Position de lecture (rafraîchie pendant que le popover est ouvert)
+
+    /// Met à jour la position toutes les secondes tant que la vue est affichée et que ça joue.
+    func startPositionTicker() {
+        stopPositionTicker()
+        positionTask = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.tickPosition()
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+            }
+        }
+    }
+
+    func stopPositionTicker() {
+        positionTask?.cancel()
+        positionTask = nil
+    }
+
+    private func tickPosition() async {
+        guard let client, isOn, nowPlaying?.isPlaying == true,
+              let ms = try? await client.playPosition() else { return }
+        positionMs = ms
+        nowPlayingCenter.updatePosition(elapsed: TimeInterval(ms) / 1000, isPlaying: true)
     }
 
     // MARK: - Volume (avec anti-rebond pour ne pas saturer l'enceinte au drag)

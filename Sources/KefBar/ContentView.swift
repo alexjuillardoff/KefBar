@@ -16,6 +16,7 @@ struct ContentView: View {
             if !state.host.isEmpty {
                 Divider()
                 nowPlayingView
+                progressBar
                 transportControls
                 volumeControl
                 sourcePicker
@@ -35,9 +36,13 @@ struct ContentView: View {
         .frame(width: 300)
         .task {
             await state.refresh()
-            state.startPolling()
+            state.startEventStream()
+            state.startPositionTicker()
         }
-        .onDisappear { state.stopPolling() }
+        .onDisappear {
+            state.stopEventStream()
+            state.stopPositionTicker()
+        }
         .onChange(of: state.isScanning) { scanning in
             // À la fin d'un scan, retient s'il n'a rien trouvé de nouveau (pour le message d'aide).
             if scanning {
@@ -251,6 +256,32 @@ struct ContentView: View {
             .fill(Color.secondary.opacity(0.15))
             .frame(width: 44, height: 44)
             .overlay(Image(systemName: "music.note").foregroundStyle(.secondary))
+    }
+
+    /// Barre de progression + temps écoulé/total. Masquée tant que la durée est inconnue
+    /// (best-effort : tous les services ne la communiquent pas).
+    @ViewBuilder
+    private var progressBar: some View {
+        if let durationMs = state.nowPlaying?.durationMs, durationMs > 0 {
+            let position = min(max(0, state.positionMs), durationMs)
+            VStack(spacing: 2) {
+                ProgressView(value: Double(position), total: Double(durationMs))
+                    .progressViewStyle(.linear)
+                HStack {
+                    Text(Self.timeLabel(position))
+                    Spacer()
+                    Text(Self.timeLabel(durationMs))
+                }
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    /// Formate un nombre de millisecondes en `m:ss`.
+    private static func timeLabel(_ ms: Int) -> String {
+        let totalSeconds = max(0, ms / 1000)
+        return String(format: "%d:%02d", totalSeconds / 60, totalSeconds % 60)
     }
 
     private var transportControls: some View {

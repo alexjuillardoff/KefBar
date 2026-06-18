@@ -55,8 +55,10 @@ final class NowPlayingCenter {
             Task { @MainActor in self?.onPrevious?() }
             return .success
         }
-        // Commandes non gérées : désactivées pour ne pas capturer inutilement les touches
-        // (et éviter un scrubber trompeur, faute de position de lecture connue).
+        // Commandes non gérées : désactivées pour ne pas capturer inutilement les touches.
+        // On publie bien la position (barre de progression affichée par macOS), mais l'API KEF
+        // n'offre pas de seek → `changePlaybackPositionCommand` reste désactivée (barre en
+        // lecture seule).
         c.seekForwardCommand.isEnabled = false
         c.seekBackwardCommand.isEnabled = false
         c.skipForwardCommand.isEnabled = false
@@ -68,8 +70,10 @@ final class NowPlayingCenter {
 
     /// Met à jour le centre « En cours de lecture » à partir de l'état de l'enceinte.
     /// Appeler à chaque rafraîchissement : l'opération est idempotente et ne recharge la
-    /// pochette que si son URL a changé.
-    func update(nowPlaying: NowPlaying?, isOn: Bool) {
+    /// pochette que si son URL a changé. `elapsed` (secondes) renseigne la position courante :
+    /// avec la durée et le débit de lecture, macOS interpole la barre de progression sans qu'on
+    /// ait à la rafraîchir en continu.
+    func update(nowPlaying: NowPlaying?, isOn: Bool, elapsed: TimeInterval? = nil) {
         guard isOn, let np = nowPlaying else {
             clear()
             return
@@ -80,6 +84,15 @@ final class NowPlayingCenter {
         info[MPMediaItemPropertyArtist] = np.artist ?? ""
         info[MPMediaItemPropertyAlbumTitle] = np.album ?? ""
         info[MPNowPlayingInfoPropertyMediaType] = MPNowPlayingInfoMediaType.audio.rawValue
+        if let durationMs = np.durationMs, durationMs > 0 {
+            info[MPMediaItemPropertyPlaybackDuration] = TimeInterval(durationMs) / 1000
+        } else {
+            info[MPMediaItemPropertyPlaybackDuration] = nil
+        }
+        if let elapsed {
+            info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = elapsed
+        }
+        info[MPNowPlayingInfoPropertyPlaybackRate] = np.isPlaying ? 1.0 : 0.0
         infoCenter.nowPlayingInfo = info
         infoCenter.playbackState = np.isPlaying ? .playing : .paused
 
@@ -87,6 +100,16 @@ final class NowPlayingCenter {
             publishedArtworkURL = np.coverURL
             loadArtwork(np.coverURL)
         }
+    }
+
+    /// Met à jour uniquement la position de lecture (sans toucher au reste des infos), pour le
+    /// ticker seconde par seconde. Sans effet si rien n'est publié.
+    func updatePosition(elapsed: TimeInterval, isPlaying: Bool) {
+        guard infoCenter.playbackState != .stopped, infoCenter.nowPlayingInfo != nil else { return }
+        var info = infoCenter.nowPlayingInfo ?? [:]
+        info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = elapsed
+        info[MPNowPlayingInfoPropertyPlaybackRate] = isPlaying ? 1.0 : 0.0
+        infoCenter.nowPlayingInfo = info
     }
 
     private func clear() {

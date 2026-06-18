@@ -39,8 +39,8 @@ keyboard — using the same undocumented local API that the KEF Connect app uses
 - 🎛️ **Source selector** — Wi-Fi, Bluetooth, TV/HDMI, Optical, Coaxial, Aux
 - ⏯️ **Transport** — play / pause, next / previous track
 - ⌨️ **Media keys** — the Mac's physical play/pause, ⏮/⏭ keys control the speaker; playback also shows up in Control Center
-- 🎵 **Now playing** — title, artist and album artwork
-- 🔄 **Auto-refresh** every 3 seconds
+- 🎵 **Now playing** — title, artist, album artwork and a **progress bar** (elapsed / total)
+- 🔄 **Real-time updates** — subscribes to the speaker's event stream (long-poll) for near-instant refresh, with a polling fallback
 - 🪶 **No Dock icon** — lives quietly in the menu bar (accessory app)
 
 > 💡 DHCP-friendly: speakers are remembered by their **MAC address**, so if a speaker's IP
@@ -104,8 +104,8 @@ sur votre réseau local.
 - Sélection de source : Wi-Fi, Bluetooth, TV/HDMI, Optique, Coaxial, Aux
 - Lecture / pause, piste suivante / précédente
 - ⌨️ **Touches média du clavier** : les touches lecture/pause, ⏮/⏭ du Mac pilotent l'enceinte ; la lecture apparaît aussi dans le Centre de contrôle
-- Titre, artiste et pochette en cours de lecture
-- Rafraîchissement périodique (3 s)
+- Titre, artiste, pochette et **barre de progression** (temps écoulé / total) en cours de lecture
+- Mise à jour **temps réel** : abonnement au flux d'évènements de l'enceinte (long-poll), réveil quasi instantané, avec repli sur un sondage périodique
 - Pas d'icône dans le Dock (app accessoire)
 
 > 💡 Compatible DHCP : chaque enceinte est mémorisée par son **adresse MAC**. Si son IP change,
@@ -160,7 +160,7 @@ Ajoute-les toutes et choisis l'active depuis le titre dans la barre de menus.
 |---|---|
 | `KefClient.swift` | Couche réseau : implémente le protocole HTTP/JSON KEF (getData/setData) |
 | `Discovery.swift` | Scan du réseau local pour découvrir les enceintes KEF (sondes HTTP concurrentes) |
-| `AppState.swift`  | État observable + actions + polling + liste d'enceintes & scan |
+| `AppState.swift`  | État observable + actions + flux d'évènements temps réel + position + liste d'enceintes & scan |
 | `NowPlayingCenter.swift` | Touches média du clavier (framework MediaPlayer) + intégration « En cours de lecture » macOS |
 | `Models.swift`    | `Source`, `Speaker`, `NowPlaying`, erreurs |
 | `ContentView.swift` | UI du menu (gestion des enceintes, slider, transport, sources, power) |
@@ -181,10 +181,12 @@ sans TLS ni auth.
 | Power / source | `settings:/kef/play/physicalSource` | `{"type":"kefPhysicalSource","kefPhysicalSource":"wifi"}` (`standby` = veille) |
 | Lire l'état power | `settings:/kef/host/speakerStatus` | → `standby` / `powerOn` |
 | Transport | `player:player/control` (`roles=activate`) | `{"control":"pause"}` / `"next"` / `"previous"` |
-| Now-playing | `player:player/data` | titre, métadonnées, `icon` (pochette), `state` |
+| Now-playing | `player:player/data` | titre, métadonnées, `icon` (pochette), `state`, durée |
+| Position | `player:player/data/playTime` | → `{"type":"i64_","i64_":...}` (ms) |
 
-> Bonus non implémenté ici : push temps réel via `POST /api/event/modifyQueue`
-> puis long-poll `GET /api/event/pollQueue?queueId=<uuid>&timeout=10`.
+> Temps réel : abonnement via `POST /api/event/modifyQueue` puis long-poll
+> `GET /api/event/pollQueue?queueId=<uuid>&timeout=10` (cf. [docs/PROTOCOL.md](docs/PROTOCOL.md)
+> §A.8). Modèle hybride : l'évènement réveille, les accesseurs typés font foi.
 
 ---
 

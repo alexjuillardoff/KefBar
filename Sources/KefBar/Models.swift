@@ -80,6 +80,9 @@ struct NowPlaying: Equatable {
     var album: String?
     var coverURL: URL?
     var isPlaying: Bool
+    /// Durée totale de la piste en millisecondes, si l'enceinte la communique (best-effort :
+    /// le champ varie selon le service source — voir `KefClient.nowPlaying()`).
+    var durationMs: Int?
 
     var isEmpty: Bool { (title?.isEmpty ?? true) && (artist?.isEmpty ?? true) }
 }
