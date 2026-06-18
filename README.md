@@ -73,7 +73,20 @@ keyboard — using the same undocumented local API that the KEF Connect app uses
 - The speaker's IP is found for you by the built-in **network scan** — or enter it manually
   (KEF Connect app → Settings → your speaker → Info → IP address).
 
-### Quick start
+### Install (no build — ready-to-use app)
+
+1. Download **[`KefBar.zip`](https://github.com/alexjuillardoff/KefBar/releases/latest/download/KefBar.zip)** from the [latest release](https://github.com/alexjuillardoff/KefBar/releases/latest).
+2. Double-click the zip to extract **KefBar.app**, then drag it into your **Applications** folder.
+3. The app is *ad-hoc signed* (not notarized), so on first launch macOS shows a warning.
+   **Right-click** the app → **Open** → **Open** to allow it (only needed once).
+   If macOS still blocks it, run once in Terminal:
+   ```bash
+   xattr -dr com.apple.quarantine /Applications/KefBar.app
+   ```
+
+> 🧩 The release build is **Apple Silicon (arm64) only**. On an Intel Mac, build from source (below).
+
+### Quick start (build from source)
 
 ```bash
 git clone https://github.com/alexjuillardoff/KefBar.git
@@ -147,7 +160,20 @@ sur votre réseau local.
 > 🟢 **Débutant ?** Le **[guide pas à pas](docs/GUIDE.md)** explique tout, sans jargon,
 > de l'installation jusqu'au premier réglage de volume.
 
-### Lancer
+### Installer (sans rien compiler — app prête à l'emploi)
+
+1. Téléchargez **[`KefBar.zip`](https://github.com/alexjuillardoff/KefBar/releases/latest/download/KefBar.zip)** depuis la [dernière release](https://github.com/alexjuillardoff/KefBar/releases/latest).
+2. Double-cliquez le zip pour obtenir **KefBar.app**, puis glissez-le dans votre dossier **Applications**.
+3. L'app est *signée ad-hoc* (non notarisée) : au premier lancement, macOS affiche un avertissement.
+   Faites **clic droit** sur l'app → **Ouvrir** → **Ouvrir** pour l'autoriser (une seule fois).
+   Si macOS bloque encore, lancez une fois dans le Terminal :
+   ```bash
+   xattr -dr com.apple.quarantine /Applications/KefBar.app
+   ```
+
+> 🧩 La build publiée est **Apple Silicon (arm64) uniquement**. Sur un Mac Intel, compilez depuis les sources (ci-dessous).
+
+### Lancer (compiler depuis les sources)
 
 #### Option A — bundle .app (recommandé, le plus fiable)
 
