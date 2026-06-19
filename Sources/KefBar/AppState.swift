@@ -11,7 +11,7 @@ final class AppState: ObservableObject {
     @Published var host: String {
         didSet {
             UserDefaults.standard.set(host, forKey: Self.hostKey)
-            client = host.isEmpty ? nil : KefClient(host: host)
+            client = makeClient(for: host)
             positionMs = 0
             resetPerSpeakerState()
             // Si le flux d'évènements tourne, on le relance pour s'abonner à la nouvelle
@@ -197,6 +197,15 @@ final class AppState: ObservableObject {
     /// Minuterie de veille (extinction différée, côté app).
     private var sleepTask: Task<Void, Never>?
 
+    /// Reconnexion automatique (enceinte injoignable) : garde-fous anti-emballement. Intervalle
+    /// avec **backoff exponentiel** (20 s → … → 5 min) pour ne pas marteler une enceinte éteinte
+    /// pendant des heures ; remis à la base dès qu'on est de nouveau joignable.
+    private var isRecovering = false
+    private var lastRecovery = Date.distantPast
+    private var recoveryInterval: TimeInterval = 20   // = minRecoveryInterval (littéral : pas de Self ici)
+    private static let minRecoveryInterval: TimeInterval = 20
+    private static let maxRecoveryInterval: TimeInterval = 300
+
     /// Touches média du clavier + intégration « En cours de lecture » de macOS.
     private let nowPlayingCenter = NowPlayingCenter()
 
@@ -222,7 +231,9 @@ final class AppState: ObservableObject {
         }
         savedSpeakers = speakers
 
-        client = savedHost.isEmpty ? nil : KefClient(host: savedHost)
+        // Endpoint mémorisé de l'enceinte active, s'il a déjà été résolu (sinon : moderne/legacy).
+        let savedEndpoint = speakers.first { $0.host == savedHost }?.endpoint
+        client = savedHost.isEmpty ? nil : KefClient(host: savedHost, endpoint: savedEndpoint)
 
         // Les touches média physiques pilotent l'enceinte active.
         nowPlayingCenter.onPlayPause = { [weak self] in self?.playPause() }
@@ -269,6 +280,7 @@ final class AppState: ObservableObject {
             }
             isReachable = true
             lastError = nil
+            recoveryInterval = Self.minRecoveryInterval   // joignable : on réarme la reconnexion
             nowPlayingCenter.update(nowPlaying: np, isOn: on,
                                     elapsed: pos.map { TimeInterval($0) / 1000 })
             // Configuration peu changeante (plafond de volume, profil DSP) : lue une seule fois
@@ -387,6 +399,9 @@ final class AppState: ObservableObject {
                 if Task.isCancelled { return }
                 isReachable = false
                 await refresh()
+                // Injoignable : tente une reconnexion (port changé → re-résolution, ou IP
+                // changée → redécouverte par MAC), avec throttling exponentiel.
+                await recoverConnectionIfDue()
                 try? await Task.sleep(nanoseconds: 3_000_000_000)
             }
         }
@@ -689,6 +704,15 @@ final class AppState: ObservableObject {
 
     // MARK: - Multi-enceintes & découverte
 
+    /// Construit le client de l'IP donnée en réutilisant l'**endpoint mémorisé** de l'enceinte
+    /// (schéma+port résolus), s'il existe ; sinon le client essaie moderne (`https:4430`) puis
+    /// historique (`http:80`).
+    private func makeClient(for host: String) -> KefClient? {
+        guard !host.isEmpty else { return nil }
+        let endpoint = savedSpeakers.first { $0.host == host }?.endpoint
+        return KefClient(host: host, endpoint: endpoint)
+    }
+
     /// Bascule l'enceinte active sur l'IP donnée (reconstruit le client + rafraîchit via `didSet`).
     func selectHost(_ newHost: String) {
         guard newHost != host else { return }
@@ -702,6 +726,10 @@ final class AppState: ObservableObject {
         }
         discovered.removeAll { $0.id == speaker.id || $0.host == speaker.host }
         if select { selectHost(speaker.host) }
+        // Résout l'endpoint (port/schéma) de l'enceinte si on ne le connaît pas encore.
+        if speaker.endpoint == nil {
+            Task { await resolveAndStoreEndpoint(host: speaker.host) }
+        }
     }
 
     /// Ajoute une enceinte par IP saisie à la main, puis tente de récupérer son vrai nom/MAC.
@@ -710,9 +738,89 @@ final class AppState: ObservableObject {
         guard !trimmed.isEmpty else { return }
         add(Speaker(host: trimmed))
         Task {
-            if let identified = await KefClient(host: trimmed, timeout: 3).identify() {
+            // Résout d'abord l'endpoint (au besoin par scan de ports), puis identifie via lui.
+            let endpoint = await Discovery.resolveEndpoint(host: trimmed)
+            if let identified = await KefClient(host: trimmed, timeout: 3,
+                                                endpoint: endpoint).identify() {
                 mergeIdentity(identified)
             }
+        }
+    }
+
+    /// Résout l'endpoint de l'API (schéma+port) pour une IP — y compris par **scan des ports** si
+    /// les endpoints connus ne répondent pas — puis le mémorise sur l'enceinte et reconstruit le
+    /// client si c'est l'enceinte active. Voir [`Discovery.resolveEndpoint`](Discovery.swift).
+    private func resolveAndStoreEndpoint(host h: String) async {
+        guard let endpoint = await Discovery.resolveEndpoint(host: h) else { return }
+        applyEndpoint(endpoint, forHost: h)
+    }
+
+    /// Mémorise l'endpoint résolu sur l'enceinte correspondante et, si c'est l'active, reconstruit
+    /// le client (sans relancer le flux : la boucle d'évènements relira `client` au tour suivant).
+    private func applyEndpoint(_ endpoint: KefEndpoint, forHost h: String) {
+        if let idx = savedSpeakers.firstIndex(where: { $0.host == h }),
+           savedSpeakers[idx].endpoint != endpoint {
+            savedSpeakers[idx].scheme = endpoint.scheme
+            savedSpeakers[idx].port = endpoint.port
+        }
+        if h == host { client = makeClient(for: host) }
+    }
+
+    // MARK: - Reconnexion automatique (enceinte injoignable)
+
+    /// Tente de reconnecter l'enceinte active devenue injoignable, **au plus une fois** par
+    /// intervalle (backoff). Deux causes couvertes :
+    /// 1. **Port/schéma changé** (mise à jour firmware) → on re-résout l'endpoint sur l'IP courante
+    ///    (au besoin par scan de ports).
+    /// 2. **IP changée** (DHCP) ou enceinte déplacée → redécouverte (Bonjour + scan) et re-match
+    ///    par MAC, puis résolution de l'endpoint à la nouvelle IP.
+    private func recoverConnectionIfDue() async {
+        guard !isRecovering, !host.isEmpty else { return }
+        guard Date().timeIntervalSince(lastRecovery) >= recoveryInterval else { return }
+        isRecovering = true
+        lastRecovery = Date()
+        defer {
+            isRecovering = false
+            // Allonge l'intervalle tant qu'on n'a pas retrouvé l'enceinte (refresh remet la base).
+            recoveryInterval = min(recoveryInterval * 2, Self.maxRecoveryInterval)
+        }
+
+        // 1. Même IP, endpoint peut-être déplacé.
+        if let endpoint = await Discovery.resolveEndpoint(host: host) {
+            applyEndpoint(endpoint, forHost: host)
+            await refresh()
+            return
+        }
+        // 2. IP peut-être changée : redécouverte par MAC.
+        await rediscoverActiveByMac()
+    }
+
+    /// Redécouvre l'enceinte **active** par sa MAC (Bonjour + scan), met à jour son IP et son
+    /// endpoint, puis bascule dessus. Sans MAC connue, on ne peut pas la suivre : on abandonne.
+    private func rediscoverActiveByMac() async {
+        guard let key = savedSpeakers.first(where: { $0.host == host })?.macKey else { return }
+
+        async let bonjourRaw = BonjourDiscovery().discover()
+        let active = await Discovery.scan()
+        let bonjour = (await bonjourRaw).map { Speaker(host: $0.host, name: $0.name, mac: $0.mac) }
+        let found = Self.mergeDiscovery(active: active, bonjour: bonjour)
+
+        guard let match = found.first(where: { $0.macKey == key }) else { return }
+
+        // Résout l'endpoint à la (nouvelle) IP avant de basculer.
+        let endpoint = await Discovery.resolveEndpoint(host: match.host)
+        if let idx = savedSpeakers.firstIndex(where: { $0.macKey == key }) {
+            savedSpeakers[idx].host = match.host
+            if let endpoint {
+                savedSpeakers[idx].scheme = endpoint.scheme
+                savedSpeakers[idx].port = endpoint.port
+            }
+        }
+        if match.host != host {
+            host = match.host          // didSet : makeClient (avec l'endpoint mémorisé) + relance
+        } else {
+            client = makeClient(for: host)
+            await refresh()
         }
     }
 

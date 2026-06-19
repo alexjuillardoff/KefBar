@@ -55,8 +55,9 @@ keyboard — using the same undocumented local API that the KEF Connect app uses
 > session). *Best-effort* features (play queue, notifications) hide when empty. See
 > [docs/PROTOCOL.md](docs/PROTOCOL.md) §A.11–A.12.
 
-> 💡 DHCP-friendly: speakers are remembered by their **MAC address**, so if a speaker's IP
-> changes, a rescan finds it again and updates the stored address automatically.
+> 💡 Self-healing: speakers are remembered by their **MAC address**. If one becomes unreachable,
+> KefBar reconnects on its own — changed IP (DHCP, re-matched by MAC) **or** moved API port
+> (re-resolved by **port scan**). No manual rescan needed.
 
 ### Supported speakers
 
@@ -147,8 +148,9 @@ sur votre réseau local.
 > active). Les fonctions *best-effort* (file d'attente, notifications) se masquent si vides. Cf.
 > [docs/PROTOCOL.md](docs/PROTOCOL.md) §A.11–A.12.
 
-> 💡 Compatible DHCP : chaque enceinte est mémorisée par son **adresse MAC**. Si son IP change,
-> un nouveau scan la retrouve et met l'adresse à jour automatiquement.
+> 💡 Reconnexion automatique : chaque enceinte est mémorisée par son **adresse MAC**. Si elle
+> devient injoignable, KefBar la retrouve tout seul — IP changée (DHCP, re-match par MAC) **ou**
+> port de l'API déplacé (re-résolution par **scan de ports**). Plus besoin de re-scanner à la main.
 
 ### Prérequis
 

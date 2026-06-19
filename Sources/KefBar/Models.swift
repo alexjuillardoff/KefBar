@@ -60,18 +60,42 @@ enum Source: String, CaseIterable, Identifiable, Hashable {
     }
 }
 
+/// Endpoint réseau de l'API d'une enceinte : **schéma** (`https`/`http`) + **port**.
+///
+/// Le firmware 2024 a déplacé l'API de `http://<ip>:80` vers `https://<ip>:4430`. Pour survivre
+/// à un futur déplacement, l'app sait **résoudre** l'endpoint en sondant les ports de l'enceinte
+/// (cf. [`Discovery.resolveEndpoint`](Discovery.swift)) puis le mémorise sur le `Speaker`.
+struct KefEndpoint: Equatable, Hashable {
+    var scheme: String
+    var port: Int
+
+    /// Transport moderne (firmware 2024+) et historique — candidats essayés en premier.
+    static let modern = KefEndpoint(scheme: "https", port: 4430)
+    static let legacy = KefEndpoint(scheme: "http", port: 80)
+}
+
 /// Une enceinte KEF connue de l'app (découverte ou ajoutée à la main).
 ///
 /// L'identité stable est l'**adresse MAC** quand on la connaît : l'IP peut changer
 /// (DHCP), pas la MAC. À défaut de MAC, on retombe sur l'IP. Cela permet de suivre
 /// une enceinte dont l'IP a bougé et de gérer plusieurs enceintes sans collision.
 struct Speaker: Identifiable, Codable, Hashable {
-    /// Adresse IP actuelle (hôte HTTP de l'API KEF).
+    /// Adresse IP actuelle (hôte de l'API KEF).
     var host: String
     /// Nom affiché (nom de l'appareil renvoyé par l'enceinte, ou libellé par défaut).
     var name: String
     /// Adresse MAC (`settings:/system/primaryMacAddress`) si connue — identité stable.
     var mac: String?
+    /// Schéma de l'API **résolu** pour cette enceinte (`https`/`http`), si connu.
+    var scheme: String?
+    /// Port de l'API **résolu** pour cette enceinte, si connu.
+    var port: Int?
+
+    /// Endpoint API mémorisé (schéma + port), ou `nil` tant qu'il n'a pas été résolu.
+    var endpoint: KefEndpoint? {
+        guard let scheme, let port else { return nil }
+        return KefEndpoint(scheme: scheme, port: port)
+    }
 
     /// Identifiant stable : la MAC si disponible, sinon l'IP.
     var id: String { mac ?? host }
@@ -92,10 +116,13 @@ struct Speaker: Identifiable, Codable, Hashable {
     /// Libellé par défaut quand le nom de l'appareil n'est pas (encore) connu.
     static let defaultName = "Enceinte KEF"
 
-    init(host: String, name: String = Speaker.defaultName, mac: String? = nil) {
+    init(host: String, name: String = Speaker.defaultName, mac: String? = nil,
+         endpoint: KefEndpoint? = nil) {
         self.host = host
         self.name = name.isEmpty ? Speaker.defaultName : name
         self.mac = mac
+        self.scheme = endpoint?.scheme
+        self.port = endpoint?.port
     }
 }
 

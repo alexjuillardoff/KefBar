@@ -18,24 +18,27 @@ struct KefClient {
     let host: String
     /// Délai max par requête. Court (~1,5 s) pendant un scan réseau, plus long en usage normal.
     let timeout: TimeInterval
-    /// Autorise le repli sur le transport **historique** (`http://<ip>:80`) quand le transport
-    /// **moderne** (`https://<ip>:4430`) ne se connecte pas. Désactivé pendant le scan réseau
-    /// (sondes uniques, cf. [`Discovery`](Discovery.swift)) ; les firmwares anciens sont de toute
-    /// façon repérés par Bonjour ([`BonjourDiscovery`](BonjourDiscovery.swift)) puis pilotés via ce repli.
-    let allowsLegacyFallback: Bool
+    /// Transports à essayer **dans l'ordre**, avec repli au transport suivant sur échec de
+    /// connexion. Par défaut : moderne (`https:4430`) puis historique (`http:80`). Quand
+    /// l'endpoint a été **résolu** pour l'enceinte (cf. [`Discovery.resolveEndpoint`](Discovery.swift)),
+    /// la liste se réduit à ce seul endpoint — y compris un port non standard découvert par scan.
+    let transports: [KefEndpoint]
 
-    init(host: String, timeout: TimeInterval = 5, allowsLegacyFallback: Bool = true) {
+    /// - Parameters:
+    ///   - endpoint: endpoint **résolu** de l'enceinte (schéma+port). Fourni → seul transport essayé.
+    ///   - allowsLegacyFallback: à défaut d'`endpoint`, autorise le repli `http:80` après `https:4430`.
+    ///     Désactivé pendant le scan réseau (sondes uniques) ; les firmwares anciens sont repérés
+    ///     par Bonjour puis pilotés via ce repli ou un endpoint résolu.
+    init(host: String, timeout: TimeInterval = 5,
+         endpoint: KefEndpoint? = nil, allowsLegacyFallback: Bool = true) {
         self.host = host
         self.timeout = timeout
-        self.allowsLegacyFallback = allowsLegacyFallback
+        if let endpoint {
+            self.transports = [endpoint]
+        } else {
+            self.transports = allowsLegacyFallback ? [.modern, .legacy] : [.modern]
+        }
     }
-
-    /// Transport **moderne** : depuis le firmware 2024 (`p20.x`), l'API locale n'est plus en HTTP
-    /// clair sur le port 80 mais en **HTTPS sur le port 4430** (certificat auto-signé KEF —
-    /// `O=KEF, CN=KEF-device`). Cf. [docs/PROTOCOL.md](../../docs/PROTOCOL.md).
-    private static let modern = (scheme: "https", port: 4430)
-    /// Transport **historique** : HTTP clair sur le port 80 (firmwares antérieurs).
-    private static let legacy = (scheme: "http", port: 80)
 
     /// Session partagée acceptant le certificat auto-signé de l'enceinte (cf. `KefTLSTrustDelegate`).
     /// Le délai d'attente est fixé **par requête** (`URLRequest.timeoutInterval`) — nécessaire car
@@ -48,39 +51,42 @@ struct KefClient {
 
     // MARK: - Couche bas niveau
 
-    /// URL `/api/<path>` pour un transport (schéma + port) donné.
-    private func endpoint(_ apiPath: String, query: [URLQueryItem]?, scheme: String, port: Int) -> URL {
+    /// URL `/api/<path>` pour un transport donné.
+    private func url(_ apiPath: String, query: [URLQueryItem]?, transport: KefEndpoint) -> URL {
         var comps = URLComponents()
-        comps.scheme = scheme
+        comps.scheme = transport.scheme
         comps.host = host
-        comps.port = port
+        comps.port = transport.port
         comps.path = "/api/\(apiPath)"
         comps.queryItems = query
         return comps.url!
     }
 
-    /// Exécute une requête sur le transport **moderne** (`https:4430`), avec repli sur
-    /// l'**historique** (`http:80`) en cas d'échec **de connexion** (port fermé / injoignable /
-    /// TLS) si `allowsLegacyFallback`. Une erreur HTTP (statut ≥ 400) **ne** déclenche **pas** de
-    /// repli : elle remonte telle quelle. `build` peut régler méthode/corps/en-têtes et écraser le
-    /// délai par défaut (utile pour le long-poll).
+    /// Exécute une requête en essayant les `transports` **dans l'ordre** : sur échec **de
+    /// connexion** (port fermé / injoignable / TLS), on passe au transport suivant ; sur le
+    /// dernier, l'erreur remonte. Une erreur HTTP (statut ≥ 400) **ne** déclenche **pas** de repli
+    /// (elle n'apparaît qu'à la validation, pas ici). `build` peut régler méthode/corps/en-têtes
+    /// et écraser le délai par défaut (utile pour le long-poll).
     private func send(apiPath: String, query: [URLQueryItem]? = nil,
                       build: (inout URLRequest) -> Void = { _ in }) async throws -> (Data, URLResponse) {
-        func request(_ transport: (scheme: String, port: Int)) -> URLRequest {
-            var req = URLRequest(url: endpoint(apiPath, query: query,
-                                               scheme: transport.scheme, port: transport.port))
+        func request(_ transport: KefEndpoint) -> URLRequest {
+            var req = URLRequest(url: url(apiPath, query: query, transport: transport))
             req.timeoutInterval = timeout
             build(&req)
             return req
         }
-        do {
-            return try await Self.session.data(for: request(Self.modern))
-        } catch let error as URLError where allowsLegacyFallback && Self.isConnectionFailure(error) {
-            return try await Self.session.data(for: request(Self.legacy))
+        var lastError: Error = URLError(.cannotConnectToHost)
+        for transport in transports {
+            do {
+                return try await Self.session.data(for: request(transport))
+            } catch let error as URLError where Self.isConnectionFailure(error) {
+                lastError = error   // tente le transport suivant, s'il en reste
+            }
         }
+        throw lastError
     }
 
-    /// Vraie pour une erreur de **connexion** (et non un statut HTTP) : justifie le repli legacy.
+    /// Vraie pour une erreur de **connexion** (et non un statut HTTP) : justifie l'essai du transport suivant.
     private static func isConnectionFailure(_ error: URLError) -> Bool {
         switch error.code {
         case .cannotConnectToHost, .timedOut, .cannotFindHost, .dnsLookupFailed,

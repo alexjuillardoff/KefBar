@@ -152,3 +152,128 @@ enum Discovery {
         "\((n >> 24) & 0xFF).\((n >> 16) & 0xFF).\((n >> 8) & 0xFF).\(n & 0xFF)"
     }
 }
+
+// MARK: - Résolution de l'endpoint API (schéma + port) d'une enceinte connue
+
+extension Discovery {
+
+    /// Plage de ports balayée pour retrouver l'API. **1…10000** : couvre tous les ports d'API
+    /// réalistes (80, 4430, 8000/8080/8443…) ; un balayage 1…65535 serait impraticable car
+    /// l'enceinte **filtre** (ignore) ses ports fermés — chacun consommerait alors tout le délai.
+    static let portScanRange: ClosedRange<Int> = 1...10000
+    /// Sockets ouverts simultanément par lot de `poll`. Sous la limite de descripteurs relevée.
+    static let portScanBatch = 800
+    /// Délai d'une vague de connexions (s). Un port ouvert répond en quelques ms ; ce délai ne
+    /// pèse que sur les ports filtrés (silencieux), traités en masse par lot.
+    static let portScanTimeout: TimeInterval = 0.6
+
+    /// Résout l'endpoint de l'API KEF pour une **IP déjà connue** : on essaie d'abord les
+    /// endpoints **connus** (`https:4430`, `http:80`), puis, en dernier recours, on **balaie les
+    /// ports** de l'enceinte et on teste l'API KEF sur chaque port ouvert (HTTPS puis HTTP).
+    /// Renvoie le premier endpoint qui répond comme une enceinte KEF, ou `nil` (injoignable).
+    ///
+    /// Survit ainsi à un futur déplacement de l'API vers un autre port — comme le passage
+    /// `http:80` → `https:4430` du firmware 2024.
+    static func resolveEndpoint(host: String, timeout: TimeInterval = 2) async -> KefEndpoint? {
+        guard !host.isEmpty else { return nil }
+        // 1. Endpoints connus, dans l'ordre de préférence (instantané s'ils répondent).
+        if let hit = await firstKefEndpoint(host: host,
+                                            candidates: [.modern, .legacy], timeout: timeout) {
+            return hit
+        }
+        // 2. Repli : ports réellement ouverts de l'hôte, en HTTPS puis HTTP, en ignorant ceux
+        //    déjà testés à l'étape 1.
+        let open = await openPorts(host: host)
+        let candidates = open
+            .filter { $0 != KefEndpoint.modern.port && $0 != KefEndpoint.legacy.port }
+            .flatMap { [KefEndpoint(scheme: "https", port: $0), KefEndpoint(scheme: "http", port: $0)] }
+        return await firstKefEndpoint(host: host, candidates: candidates, timeout: timeout)
+    }
+
+    /// Premier endpoint de `candidates` qui répond comme une enceinte KEF (chemin `speakerStatus`
+    /// parsable). Essayés en série pour respecter l'ordre de préférence (HTTPS avant HTTP).
+    private static func firstKefEndpoint(host: String, candidates: [KefEndpoint],
+                                         timeout: TimeInterval) async -> KefEndpoint? {
+        for ep in candidates {
+            let client = KefClient(host: host, timeout: timeout, endpoint: ep)
+            if (try? await client.isPoweredOn()) != nil { return ep }
+        }
+        return nil
+    }
+
+    /// Ports TCP **ouverts** de l'hôte. Technique du **`poll` groupé** : par lots de
+    /// `portScanBatch`, on ouvre des sockets non bloquants, on lance toutes les connexions, puis
+    /// on attend l'ensemble en **un seul `poll`** (un seul thread, pas d'explosion de threads).
+    /// Tout le balayage tourne sur une file de fond pour ne pas bloquer le pool coopératif Swift.
+    static func openPorts(host: String, range: ClosedRange<Int> = portScanRange) async -> [Int] {
+        await withCheckedContinuation { (cont: CheckedContinuation<[Int], Never>) in
+            DispatchQueue.global(qos: .userInitiated).async {
+                cont.resume(returning: scanPorts(host: host, range: range))
+            }
+        }
+    }
+
+    private static func scanPorts(host: String, range: ClosedRange<Int>) -> [Int] {
+        var base = sockaddr_in()
+        base.sin_family = sa_family_t(AF_INET)
+        guard inet_pton(AF_INET, host, &base.sin_addr) == 1 else { return [] }
+        raiseDescriptorLimit()
+
+        var open: [Int] = []
+        var start = range.lowerBound
+        while start <= range.upperBound {
+            let end = min(start + portScanBatch - 1, range.upperBound)
+            open += connectBatch(base: base, ports: start...end)
+            start = end + 1
+        }
+        return open.sorted()
+    }
+
+    /// Lance les connexions non bloquantes d'un lot de ports puis les attend en un seul `poll`.
+    private static func connectBatch(base: sockaddr_in, ports: ClosedRange<Int>) -> [Int] {
+        var open: [Int] = []
+        var pfds: [pollfd] = []
+        var portOf: [Int32: Int] = [:]
+
+        for p in ports {
+            let fd = socket(AF_INET, SOCK_STREAM, 0)
+            if fd < 0 { continue }
+            _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK)
+            var addr = base
+            addr.sin_port = in_port_t(p).bigEndian
+            let rc = withUnsafePointer(to: &addr) { ptr in
+                ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                    connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+                }
+            }
+            if rc == 0 { open.append(p); close(fd); continue }       // connecté tout de suite
+            if errno != EINPROGRESS { close(fd); continue }          // refusé immédiatement
+            portOf[fd] = p
+            pfds.append(pollfd(fd: fd, events: Int16(POLLOUT), revents: 0))
+        }
+
+        if !pfds.isEmpty {
+            _ = poll(&pfds, nfds_t(pfds.count), Int32(portScanTimeout * 1000))
+            for pfd in pfds where (pfd.revents & Int16(POLLOUT)) != 0 {
+                var soErr: Int32 = 0
+                var len = socklen_t(MemoryLayout<Int32>.size)
+                getsockopt(pfd.fd, SOL_SOCKET, SO_ERROR, &soErr, &len)
+                if soErr == 0, let p = portOf[pfd.fd] { open.append(p) }
+            }
+        }
+        portOf.keys.forEach { close($0) }
+        return open
+    }
+
+    /// Relève la limite douce de descripteurs (souvent 256 par défaut) pour tenir un lot de
+    /// `portScanBatch` sockets simultanés. Best-effort.
+    private static func raiseDescriptorLimit() {
+        var lim = rlimit()
+        guard getrlimit(RLIMIT_NOFILE, &lim) == 0 else { return }
+        let target = rlim_t(portScanBatch + 256)
+        if lim.rlim_cur < target {
+            lim.rlim_cur = min(target, lim.rlim_max)
+            _ = setrlimit(RLIMIT_NOFILE, &lim)
+        }
+    }
+}

@@ -45,7 +45,7 @@ des callbacks (touches → actions).
 | Fichier | Responsabilité |
 |---|---|
 | [`KefClient.swift`](../Sources/KefBar/KefClient.swift) | Couche réseau pure. `getData`/`setData` bas niveau + méthodes haut niveau (timeout configurable, `macAddress()`, sonde `identify()`). Aucune dépendance UI. |
-| [`Discovery.swift`](../Sources/KefBar/Discovery.swift) | Scan actif du sous-réseau local (`getifaddrs` + sondes `KefClient.identify()` concurrentes) pour découvrir les enceintes KEF **réveillées**. Pur, sans dépendance UI. |
+| [`Discovery.swift`](../Sources/KefBar/Discovery.swift) | Scan actif du sous-réseau (`getifaddrs` + sondes `KefClient.identify()` concurrentes) pour les enceintes **réveillées**, **et** résolution d'endpoint (`resolveEndpoint` : endpoints connus puis **scan de ports** `poll` groupé) pour retrouver le port de l'API. Pur, sans dépendance UI. |
 | [`BonjourDiscovery.swift`](../Sources/KefBar/BonjourDiscovery.swift) | **Complément Bonjour** du scan actif. Parcourt `_airplay._tcp`, résout le TXT, filtre `manufacturer=KEF`, et renvoie nom + MAC (`deviceid`) + IPv4. Repère l'enceinte **même en veille** (API port-80 endormie), là où le scan actif échoue. `@MainActor`. |
 | [`AppState.swift`](../Sources/KefBar/AppState.swift) | `@MainActor ObservableObject` : état `@Published`, orchestration async, polling, debounce, **liste d'enceintes** + scan, persistance (IP active + enceintes). Détient le `NowPlayingCenter`. |
 | [`NowPlayingCenter.swift`](../Sources/KefBar/NowPlayingCenter.swift) | `@MainActor`. Pont vers **MediaPlayer** : reçoit les **touches média** physiques (`MPRemoteCommandCenter`) et publie la lecture en cours (`MPNowPlayingInfoCenter`) — ce qui fait de l'app l'application « En cours de lecture » du système, condition pour recevoir ces touches. Aucune dépendance UI/réseau. |
@@ -381,6 +381,20 @@ La même MAC arrive sous deux formats selon la source (`primaryMacAddress` en po
 Bonjour) : on compare donc toujours via `Speaker.macKey` (minuscules, séparateurs retirés), jamais
 le champ `mac` brut.
 
+### Endpoint de l'API & reconnexion automatique
+
+Chaque `Speaker` mémorise l'**endpoint** résolu de son API (`scheme` + `port`, exposé via
+`Speaker.endpoint`) ; `AppState.makeClient(for:)` en fait un `KefClient` ciblant directement ce
+transport. La résolution (`Discovery.resolveEndpoint`) essaie d'abord les endpoints connus
+(`https:4430`, `http:80`), puis **balaie les ports** de l'enceinte (`openPorts`, 1…10000, `poll`
+groupé) et teste l'API KEF sur chaque port ouvert — ce qui rend l'app robuste à un futur
+déplacement de l'API (comme `http:80` → `https:4430` en 2024).
+
+Quand l'enceinte active devient **injoignable**, la boucle d'évènements appelle
+`recoverConnectionIfDue()` (throttle à **backoff exponentiel**, 20 s → 5 min, réarmé dès qu'on
+est joignable) : (1) re-résoudre l'endpoint sur l'IP courante (le port a pu bouger), sinon
+(2) **redécouvrir par MAC** (Bonjour + scan) pour suivre un changement d'IP DHCP, puis re-résoudre.
+
 ## 7. Entrée & barre de menus
 
 L'app **n'a pas de fenêtre principale** : `KefBarApp` ne déclare qu'une scène `Settings` vide,
@@ -475,6 +489,7 @@ Détail complet et confiance par point : [VERIFICATION.md](VERIFICATION.md#3-ce-
 | ~~**Position / progression**~~ ✅ | Fait — `playPosition()` (`playTime`) + durée du now-playing → barre de progression et position « En cours » macOS. **Barre interactive** : clic/glissement → `seek(toMs:)` (commande `seek` best-effort, non vérifiée matériel) ; scrubber « En cours » macOS également actif. |
 | ~~**Multi-enceintes**~~ ✅ | Fait — `AppState.savedSpeakers: [Speaker]` + IP active, sélecteur dans l'en-tête. |
 | ~~**Découverte auto**~~ ✅ | Fait — [`Discovery.swift`](../Sources/KefBar/Discovery.swift) scanne le LAN via sondes HTTP, **complété par** [`BonjourDiscovery.swift`](../Sources/KefBar/BonjourDiscovery.swift) (`_airplay._tcp`, filtre `manufacturer=KEF`) qui repère aussi l'enceinte **en veille** (port 80 endormi). Fusion par MAC dans `mergeDiscovery`. |
+| ~~**Résolution de port / reconnexion auto**~~ ✅ | Fait — `Discovery.resolveEndpoint` (endpoints connus puis **scan de ports** `poll` groupé) mémorise `scheme`/`port` sur le `Speaker` ; `AppState.recoverConnectionIfDue()` reconnecte tout seul (backoff) sur port déplacé ou IP DHCP changée. |
 | ~~**Touches média (lecture)**~~ ✅ | Fait — [`NowPlayingCenter.swift`](../Sources/KefBar/NowPlayingCenter.swift) : play/pause, ⏮, ⏭ via le clavier (framework MediaPlayer, sans permission). |
 | ~~**Mode de lecture (repeat/shuffle)**~~ ✅ | Fait — `cyclePlayMode()` (`settings:/mediaPlayer/playMode`), bouton unique dans le transport ([PROTOCOL A.11](PROTOCOL.md#a11-mode-de-lecture-file-dattente--notifications)). |
 | ~~**Limite de volume**~~ ✅ | Fait — `maximumVolume()` borne le slider (les boutons −/+ vont par pas de 1). |
