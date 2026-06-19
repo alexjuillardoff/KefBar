@@ -45,7 +45,8 @@ des callbacks (touches → actions).
 | Fichier | Responsabilité |
 |---|---|
 | [`KefClient.swift`](../Sources/KefBar/KefClient.swift) | Couche réseau pure. `getData`/`setData` bas niveau + méthodes haut niveau (timeout configurable, `macAddress()`, sonde `identify()`). Aucune dépendance UI. |
-| [`Discovery.swift`](../Sources/KefBar/Discovery.swift) | Scan actif du sous-réseau local (`getifaddrs` + sondes `KefClient.identify()` concurrentes) pour découvrir les enceintes KEF. Pur, sans dépendance UI. |
+| [`Discovery.swift`](../Sources/KefBar/Discovery.swift) | Scan actif du sous-réseau local (`getifaddrs` + sondes `KefClient.identify()` concurrentes) pour découvrir les enceintes KEF **réveillées**. Pur, sans dépendance UI. |
+| [`BonjourDiscovery.swift`](../Sources/KefBar/BonjourDiscovery.swift) | **Complément Bonjour** du scan actif. Parcourt `_airplay._tcp`, résout le TXT, filtre `manufacturer=KEF`, et renvoie nom + MAC (`deviceid`) + IPv4. Repère l'enceinte **même en veille** (API port-80 endormie), là où le scan actif échoue. `@MainActor`. |
 | [`AppState.swift`](../Sources/KefBar/AppState.swift) | `@MainActor ObservableObject` : état `@Published`, orchestration async, polling, debounce, **liste d'enceintes** + scan, persistance (IP active + enceintes). Détient le `NowPlayingCenter`. |
 | [`NowPlayingCenter.swift`](../Sources/KefBar/NowPlayingCenter.swift) | `@MainActor`. Pont vers **MediaPlayer** : reçoit les **touches média** physiques (`MPRemoteCommandCenter`) et publie la lecture en cours (`MPNowPlayingInfoCenter`) — ce qui fait de l'app l'application « En cours de lecture » du système, condition pour recevoir ces touches. Aucune dépendance UI/réseau. |
 | [`Models.swift`](../Sources/KefBar/Models.swift) | `Source` (enum + libellés FR + SF Symbols), `Speaker` (enceinte connue, identité par MAC), `PlayMode` (cycle répétition/aléatoire), `QueueItem`, `NowPlaying`, `KefError`. |
@@ -337,24 +338,36 @@ Deux clés `UserDefaults` :
 **Migration** : au démarrage, si `kef.speakers` est vide mais `kef.host` existe (utilisateur
 d'une version antérieure), une `Speaker` est créée à partir de l'IP.
 
-### Découverte réseau (`Discovery.swift`)
+### Découverte réseau (`Discovery.swift` + `BonjourDiscovery.swift`)
 
-Scan **actif** du sous-réseau, pas de Bonjour :
+**Deux sources fusionnées par MAC**, lancées en parallèle dans `AppState.scan()` :
 
 ```
-candidateHosts()                       group de tâches (fenêtre glissante, 64 en vol)
+scan actif (Discovery)                 group de tâches (fenêtre glissante, 64 en vol)
  ├─ getifaddrs() → interfaces en*       ┌─────────────────────────────────────────┐
  │   privées, actives, non-loopback     │ KefClient(ip, timeout: 1,5 s).identify() │
  ├─ adresse & masque → plage d'hôtes    │  └─ getData speakerStatus (propre à KEF) │
  └─ /24 typique = 254 IP (cap 1024)     │     hit ⇒ + deviceName + macAddress      │
                                         └─────────────────────────────────────────┘
-                                                  ▼  Speaker? (nil si non-KEF)
-                                          tri par IP → AppState.discovered
+                                                  ▼  enceintes RÉVEILLÉES (port 80)
+Bonjour (BonjourDiscovery)
+ └─ _airplay._tcp → résout TXT          ┌─────────────────────────────────────────┐
+     manufacturer=KEF ? (filtre)        │ deviceid (MAC) + model (nom) + IPv4      │
+                                        └─────────────────────────────────────────┘
+                                                  ▼  enceintes MÊME EN VEILLE
+                              mergeDiscovery (dédup par macKey) → AppState.discovered
 ```
 
-- **Pourquoi un scan HTTP plutôt que `NWBrowser`/Bonjour ?** Le chemin `speakerStatus` est
-  spécifique à KEF : seules de vraies enceintes répondent. Bonjour (`_airplay._tcp`) remonterait
-  aussi Apple TV, HomePod, Chromecast… L'API étant déjà du HTTP local, aucune permission en plus.
+- **Pourquoi le complément Bonjour ?** Une enceinte en **veille endort son API HTTP** : le port 80
+  expire (timeout), donc le scan actif ne la voit plus du tout — symptôme « ne trouve plus
+  l'enceinte ». Mais elle **reste annoncée en AirPlay** ; son TXT porte `manufacturer=KEF`,
+  `model` et `deviceid` (la MAC). Le filtre `manufacturer=KEF` écarte Apple TV / HomePod /
+  Chromecast (l'objection initiale à Bonjour). Bonjour donne donc l'enceinte **et son identité
+  stable** même injoignable, ce qui permet de la reconnecter dès son réveil.
+- **Pourquoi garder aussi le scan actif ?** Le chemin `speakerStatus` confirme une vraie KEF
+  réveillée et fournit son nom/MAC depuis l'appareil ; il reste la source faisant foi quand
+  l'enceinte répond. Les deux sont fusionnés par `mergeDiscovery`, le scan actif primant sur
+  l'hôte/nom en cas de doublon (port-80 confirmé).
 - **Concurrence** : `withTaskGroup` en fenêtre glissante de 64 sondes (< limite de descripteurs
   macOS). Un /24 se scanne en quelques secondes ; la progression `0…1` alimente `scanProgress`.
 
@@ -364,6 +377,9 @@ candidateHosts()                       group de tâches (fenêtre glissante, 64 
 `Speaker.id = mac ?? host` : la **MAC** sert d'identité stable. Conséquence concrète — si une
 enceinte change d'IP (DHCP), un scan la retrouve par sa MAC et `applyScanResults` **met à jour
 son IP** (et suit l'enceinte active si c'est elle). À défaut de MAC, l'IP fait office d'identité.
+La même MAC arrive sous deux formats selon la source (`primaryMacAddress` en port-80 vs `deviceid`
+Bonjour) : on compare donc toujours via `Speaker.macKey` (minuscules, séparateurs retirés), jamais
+le champ `mac` brut.
 
 ## 7. Entrée & barre de menus
 
@@ -458,7 +474,7 @@ Détail complet et confiance par point : [VERIFICATION.md](VERIFICATION.md#3-ce-
 | ~~**Push temps réel**~~ ✅ | Fait — `runEventLoop()` s'abonne (`modifyQueue`) et enchaîne les long-polls (`pollQueue`) via `KefClient.subscribeToEvents()`/`pollEvents(...)` ([PROTOCOL A.8](PROTOCOL.md#a8-push-temps-réel-long-poll)). Repli polling si indisponible. |
 | ~~**Position / progression**~~ ✅ | Fait — `playPosition()` (`playTime`) + durée du now-playing → barre de progression et position « En cours » macOS. **Barre interactive** : clic/glissement → `seek(toMs:)` (commande `seek` best-effort, non vérifiée matériel) ; scrubber « En cours » macOS également actif. |
 | ~~**Multi-enceintes**~~ ✅ | Fait — `AppState.savedSpeakers: [Speaker]` + IP active, sélecteur dans l'en-tête. |
-| ~~**Découverte auto**~~ ✅ | Fait — [`Discovery.swift`](../Sources/KefBar/Discovery.swift) scanne le LAN via sondes HTTP (plus fiable que Bonjour : ne remonte **que** des KEF). |
+| ~~**Découverte auto**~~ ✅ | Fait — [`Discovery.swift`](../Sources/KefBar/Discovery.swift) scanne le LAN via sondes HTTP, **complété par** [`BonjourDiscovery.swift`](../Sources/KefBar/BonjourDiscovery.swift) (`_airplay._tcp`, filtre `manufacturer=KEF`) qui repère aussi l'enceinte **en veille** (port 80 endormi). Fusion par MAC dans `mergeDiscovery`. |
 | ~~**Touches média (lecture)**~~ ✅ | Fait — [`NowPlayingCenter.swift`](../Sources/KefBar/NowPlayingCenter.swift) : play/pause, ⏮, ⏭ via le clavier (framework MediaPlayer, sans permission). |
 | ~~**Mode de lecture (repeat/shuffle)**~~ ✅ | Fait — `cyclePlayMode()` (`settings:/mediaPlayer/playMode`), bouton unique dans le transport ([PROTOCOL A.11](PROTOCOL.md#a11-mode-de-lecture-file-dattente--notifications)). |
 | ~~**Limite de volume**~~ ✅ | Fait — `maximumVolume()` borne le slider (les boutons −/+ vont par pas de 1). |

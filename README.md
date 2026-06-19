@@ -213,7 +213,8 @@ Ajoute-les toutes et choisis l'active depuis le titre dans la barre de menus.
 | Fichier | Rôle |
 |---|---|
 | `KefClient.swift` | Couche réseau : implémente le protocole HTTP/JSON KEF (getData/setData) |
-| `Discovery.swift` | Scan du réseau local pour découvrir les enceintes KEF (sondes HTTP concurrentes) |
+| `Discovery.swift` | Scan du réseau local pour découvrir les enceintes KEF réveillées (sondes HTTP concurrentes) |
+| `BonjourDiscovery.swift` | Complément Bonjour (`_airplay._tcp`, filtre `manufacturer=KEF`) : repère l'enceinte même **en veille** |
 | `AppState.swift`  | État observable + actions + flux d'évènements temps réel + position + liste d'enceintes & scan |
 | `NowPlayingCenter.swift` | Touches média du clavier (framework MediaPlayer) + intégration « En cours de lecture » macOS |
 | `Models.swift`    | `Source`, `Speaker`, `NowPlaying`, erreurs |
@@ -225,11 +226,12 @@ Ajoute-les toutes et choisis l'active depuis le titre dans la barre de menus.
 ### Le protocole (résumé)
 
 API non officielle, rétro-ingénieriée depuis l'app KEF Connect
-(réf. [pykefcontrol](https://github.com/N0ciple/pykefcontrol)). HTTP simple, port 80,
-sans TLS ni auth.
+(réf. [pykefcontrol](https://github.com/N0ciple/pykefcontrol)). Depuis le **firmware 2024**
+(`p20.x`), l'API est en **HTTPS sur le port 4430** (certificat auto-signé KEF, sans auth) ;
+les firmwares antérieurs servaient en **HTTP clair sur le port 80** (KefBar s'y replie).
 
-- Lecture : `GET http://<ip>/api/getData?path=<path>&roles=value` → `[{...}]`
-- Écriture : `POST http://<ip>/api/setData` body `{"path":...,"roles":"value","value":{...}}`
+- Lecture : `GET https://<ip>:4430/api/getData?path=<path>&roles=value` → `[{...}]`
+- Écriture : `POST https://<ip>:4430/api/setData` body `{"path":...,"roles":"value","value":{...}}`
 
 | Action | path | valeur |
 |---|---|---|

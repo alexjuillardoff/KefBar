@@ -9,9 +9,9 @@
     <key>CFBundleIdentifier</key>
     <string>io.github.alexjuillardoff.kefbar</string>
     <key>CFBundleVersion</key>
-    <string>1</string>
+    <string>2</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.1</string>
+    <string>0.2</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleExecutable</key>
@@ -30,5 +30,11 @@
     <!-- macOS Sonoma+ : déclaration d'accès au réseau local. -->
     <key>NSLocalNetworkUsageDescription</key>
     <string>KefBar communique avec vos enceintes KEF sur le réseau local.</string>
+    <!-- Services Bonjour parcourus pour repérer les enceintes (même en veille, via AirPlay). -->
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_airplay._tcp</string>
+        <string>_raop._tcp</string>
+    </array>
 </dict>
 </plist>

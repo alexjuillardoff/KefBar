@@ -61,7 +61,8 @@ attend le verdict, **agrafe** le ticket sur le `.app`, puis produit `KefBar.zip`
 ## 5. Publier
 
 ```bash
-gh release upload v0.1 KefBar.zip --clobber
+# Joindre le binaire notarisé à la release (adapter le tag à la version courante)
+gh release upload v0.2 KefBar.zip --clobber
 ```
 
 Le `.app` agrafé s'ouvre désormais d'un simple double-clic chez tout le monde — plus aucun

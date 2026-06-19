@@ -725,19 +725,50 @@ final class AppState: ObservableObject {
     }
 
     /// Lance un scan du réseau local pour découvrir les enceintes KEF.
+    ///
+    /// Deux sources fusionnées : le **scan actif port-80** ([`Discovery`](Discovery.swift)),
+    /// qui ne voit que les enceintes réveillées, et la **découverte Bonjour**
+    /// ([`BonjourDiscovery`](BonjourDiscovery.swift)), qui repère aussi celles **en veille**
+    /// (API endormie) via leur annonce AirPlay. La fusion par MAC permet de retrouver une
+    /// enceinte connue même quand son port 80 ne répond plus.
     func scan() {
         guard !isScanning else { return }
         isScanning = true
         scanProgress = 0
         discovered = []
         Task {
-            let found = await Discovery.scan { fraction in
+            async let bonjourTask = BonjourDiscovery().discover()
+            let active = await Discovery.scan { fraction in
                 Task { @MainActor in self.scanProgress = fraction }
             }
-            self.applyScanResults(found)
+            let bonjour = await bonjourTask.map {
+                Speaker(host: $0.host, name: $0.name, mac: $0.mac)
+            }
+            self.applyScanResults(Self.mergeDiscovery(active: active, bonjour: bonjour))
             self.isScanning = false
             self.scanProgress = 1
         }
+    }
+
+    /// Fusionne les enceintes du scan actif (port-80, réveillées) et de Bonjour (y compris en
+    /// veille), dédupliquées par MAC. Le scan actif **prime** sur l'hôte/nom quand les deux
+    /// voient la même enceinte (identité confirmée par le port 80) ; Bonjour apporte les
+    /// enceintes endormies et complète un nom resté par défaut.
+    private static func mergeDiscovery(active: [Speaker], bonjour: [Speaker]) -> [Speaker] {
+        var byKey: [String: Speaker] = [:]
+        var hostOnly: [Speaker] = []   // sans MAC exploitable : on les garde tels quels
+
+        func insert(_ speaker: Speaker, overridesHost: Bool) {
+            guard let key = speaker.macKey else { hostOnly.append(speaker); return }
+            guard var existing = byKey[key] else { byKey[key] = speaker; return }
+            if overridesHost { existing.host = speaker.host }
+            if existing.name == Speaker.defaultName { existing.name = speaker.name }
+            byKey[key] = existing
+        }
+
+        bonjour.forEach { insert($0, overridesHost: false) }
+        active.forEach  { insert($0, overridesHost: true) }   // le port-80 confirmé l'emporte
+        return Array(byKey.values) + hostOnly
     }
 
     /// Intègre les résultats d'un scan : met à jour les IP des enceintes connues dont la MAC
@@ -747,8 +778,8 @@ final class AppState: ObservableObject {
         var newActiveHost = host
 
         for f in found {
-            guard let mac = f.mac,
-                  let idx = speakers.firstIndex(where: { $0.mac == mac }) else { continue }
+            guard let key = f.macKey,
+                  let idx = speakers.firstIndex(where: { $0.macKey == key }) else { continue }
             // Suit le changement d'IP de l'enceinte active.
             if speakers[idx].host == host { newActiveHost = f.host }
             speakers[idx].host = f.host
@@ -760,7 +791,7 @@ final class AppState: ObservableObject {
 
         discovered = found.filter { f in
             !speakers.contains { saved in
-                (saved.mac != nil && saved.mac == f.mac) || saved.host == f.host
+                (saved.macKey != nil && saved.macKey == f.macKey) || saved.host == f.host
             }
         }
     }

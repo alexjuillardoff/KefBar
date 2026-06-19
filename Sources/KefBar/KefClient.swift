@@ -4,47 +4,100 @@ import Foundation
 /// (LSX II, LS50 Wireless II, LS60, XIO).
 ///
 /// Protocole (non officiel, rétro-ingénierié depuis l'app KEF Connect — cf. pykefcontrol) :
-///   • Lecture :     GET  http://<ip>/api/getData?path=<path>&roles=value
+///   • Lecture :     GET  <base>/api/getData?path=<path>&roles=value
 ///                   → renvoie un tableau JSON à un élément, p.ex. `[{"type":"i32_","i32_":40}]`
-///   • Écriture :    POST http://<ip>/api/setData
+///   • Écriture :    POST <base>/api/setData
 ///                   body JSON : {"path": "...", "roles": "value", "value": { ... }}
 ///
-/// HTTP simple sur le port 80, sans TLS ni authentification. Réserve une IP fixe
-/// pour l'enceinte dans ta box, sinon l'adresse changera.
+/// **Transport** : depuis le firmware 2024 (`p20.x`), `<base>` est `https://<ip>:4430`
+/// (TLS, certificat **auto-signé** KEF accepté par `KefTLSTrustDelegate`). Les firmwares
+/// antérieurs servaient en clair sur `http://<ip>:80` ; on s'y replie automatiquement quand
+/// le HTTPS ne se connecte pas (`allowsLegacyFallback`). Aucune authentification dans les deux
+/// cas. Réserve une IP fixe pour l'enceinte dans ta box, sinon l'adresse changera.
 struct KefClient {
     let host: String
     /// Délai max par requête. Court (~1,5 s) pendant un scan réseau, plus long en usage normal.
     let timeout: TimeInterval
+    /// Autorise le repli sur le transport **historique** (`http://<ip>:80`) quand le transport
+    /// **moderne** (`https://<ip>:4430`) ne se connecte pas. Désactivé pendant le scan réseau
+    /// (sondes uniques, cf. [`Discovery`](Discovery.swift)) ; les firmwares anciens sont de toute
+    /// façon repérés par Bonjour ([`BonjourDiscovery`](BonjourDiscovery.swift)) puis pilotés via ce repli.
+    let allowsLegacyFallback: Bool
 
-    init(host: String, timeout: TimeInterval = 5) {
+    init(host: String, timeout: TimeInterval = 5, allowsLegacyFallback: Bool = true) {
         self.host = host
         self.timeout = timeout
+        self.allowsLegacyFallback = allowsLegacyFallback
     }
 
-    private var session: URLSession { session(timeout: timeout) }
+    /// Transport **moderne** : depuis le firmware 2024 (`p20.x`), l'API locale n'est plus en HTTP
+    /// clair sur le port 80 mais en **HTTPS sur le port 4430** (certificat auto-signé KEF —
+    /// `O=KEF, CN=KEF-device`). Cf. [docs/PROTOCOL.md](../../docs/PROTOCOL.md).
+    private static let modern = (scheme: "https", port: 4430)
+    /// Transport **historique** : HTTP clair sur le port 80 (firmwares antérieurs).
+    private static let legacy = (scheme: "http", port: 80)
 
-    /// Session éphémère avec un délai d'attente explicite. Le long-poll d'événements
-    /// (`pollEvents`) en a besoin : sa requête reste ouverte plus longtemps que le délai normal.
-    private func session(timeout: TimeInterval) -> URLSession {
+    /// Session partagée acceptant le certificat auto-signé de l'enceinte (cf. `KefTLSTrustDelegate`).
+    /// Le délai d'attente est fixé **par requête** (`URLRequest.timeoutInterval`) — nécessaire car
+    /// le long-poll d'évènements (`pollEvents`) reste ouvert bien plus longtemps que les autres appels.
+    private static let session: URLSession = {
         let cfg = URLSessionConfiguration.ephemeral
-        cfg.timeoutIntervalForRequest = timeout
         cfg.waitsForConnectivity = false
-        return URLSession(configuration: cfg)
-    }
+        return URLSession(configuration: cfg, delegate: KefTLSTrustDelegate(), delegateQueue: nil)
+    }()
 
     // MARK: - Couche bas niveau
 
+    /// URL `/api/<path>` pour un transport (schéma + port) donné.
+    private func endpoint(_ apiPath: String, query: [URLQueryItem]?, scheme: String, port: Int) -> URL {
+        var comps = URLComponents()
+        comps.scheme = scheme
+        comps.host = host
+        comps.port = port
+        comps.path = "/api/\(apiPath)"
+        comps.queryItems = query
+        return comps.url!
+    }
+
+    /// Exécute une requête sur le transport **moderne** (`https:4430`), avec repli sur
+    /// l'**historique** (`http:80`) en cas d'échec **de connexion** (port fermé / injoignable /
+    /// TLS) si `allowsLegacyFallback`. Une erreur HTTP (statut ≥ 400) **ne** déclenche **pas** de
+    /// repli : elle remonte telle quelle. `build` peut régler méthode/corps/en-têtes et écraser le
+    /// délai par défaut (utile pour le long-poll).
+    private func send(apiPath: String, query: [URLQueryItem]? = nil,
+                      build: (inout URLRequest) -> Void = { _ in }) async throws -> (Data, URLResponse) {
+        func request(_ transport: (scheme: String, port: Int)) -> URLRequest {
+            var req = URLRequest(url: endpoint(apiPath, query: query,
+                                               scheme: transport.scheme, port: transport.port))
+            req.timeoutInterval = timeout
+            build(&req)
+            return req
+        }
+        do {
+            return try await Self.session.data(for: request(Self.modern))
+        } catch let error as URLError where allowsLegacyFallback && Self.isConnectionFailure(error) {
+            return try await Self.session.data(for: request(Self.legacy))
+        }
+    }
+
+    /// Vraie pour une erreur de **connexion** (et non un statut HTTP) : justifie le repli legacy.
+    private static func isConnectionFailure(_ error: URLError) -> Bool {
+        switch error.code {
+        case .cannotConnectToHost, .timedOut, .cannotFindHost, .dnsLookupFailed,
+             .secureConnectionFailed, .serverCertificateUntrusted, .serverCertificateHasBadDate,
+             .networkConnectionLost, .notConnectedToInternet:
+            return true
+        default:
+            return false
+        }
+    }
+
     /// GET /api/getData — renvoie le premier objet du tableau de réponse.
     private func getData(path: String, roles: String = "value") async throws -> [String: Any] {
-        var comps = URLComponents(string: "http://\(host)/api/getData")!
-        comps.queryItems = [
+        let (data, resp) = try await send(apiPath: "getData", query: [
             URLQueryItem(name: "path", value: path),
             URLQueryItem(name: "roles", value: roles),
-        ]
-        var req = URLRequest(url: comps.url!)
-        req.httpMethod = "GET"
-
-        let (data, resp) = try await session.data(for: req)
+        ])
         try Self.validate(resp)
 
         let json = try JSONSerialization.jsonObject(with: data)
@@ -58,15 +111,10 @@ struct KefClient {
     /// objet). Utile pour les lectures `roles=rows` (file d'attente, notifications) dont la
     /// réponse est une liste d'éléments. Renvoie un tableau vide si le corps n'est pas une liste.
     private func getDataArray(path: String, roles: String = "value") async throws -> [[String: Any]] {
-        var comps = URLComponents(string: "http://\(host)/api/getData")!
-        comps.queryItems = [
+        let (data, resp) = try await send(apiPath: "getData", query: [
             URLQueryItem(name: "path", value: path),
             URLQueryItem(name: "roles", value: roles),
-        ]
-        var req = URLRequest(url: comps.url!)
-        req.httpMethod = "GET"
-
-        let (data, resp) = try await session.data(for: req)
+        ])
         try Self.validate(resp)
 
         let json = try JSONSerialization.jsonObject(with: data)
@@ -78,13 +126,14 @@ struct KefClient {
 
     /// POST /api/setData
     private func setData(path: String, value: [String: Any], roles: String = "value") async throws {
-        var req = URLRequest(url: URL(string: "http://\(host)/api/setData")!)
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try JSONSerialization.data(
+        let body = try JSONSerialization.data(
             withJSONObject: ["path": path, "roles": roles, "value": value]
         )
-        let (_, resp) = try await session.data(for: req)
+        let (_, resp) = try await send(apiPath: "setData") { req in
+            req.httpMethod = "POST"
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.httpBody = body
+        }
         try Self.validate(resp)
     }
 
@@ -371,13 +420,14 @@ struct KefClient {
     /// S'abonne aux changements d'état (`POST /api/event/modifyQueue`) et renvoie l'identifiant
     /// de file. La réponse est l'UUID **entre guillemets** : on les retire.
     func subscribeToEvents() async throws -> String {
-        var req = URLRequest(url: URL(string: "http://\(host)/api/event/modifyQueue")!)
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try JSONSerialization.data(
+        let body = try JSONSerialization.data(
             withJSONObject: ["subscribe": Self.eventSubscriptions, "unsubscribe": []]
         )
-        let (data, resp) = try await session.data(for: req)
+        let (data, resp) = try await send(apiPath: "event/modifyQueue") { req in
+            req.httpMethod = "POST"
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.httpBody = body
+        }
         try Self.validate(resp)
         guard let raw = String(data: data, encoding: .utf8) else { throw KefError.unexpectedResponse }
         let id = raw.trimmingCharacters(in: CharacterSet(charactersIn: "\"\n\r "))
@@ -389,14 +439,12 @@ struct KefClient {
     /// éléments modifiés. On renvoie `true` si au moins un changement a été signalé (`false` si
     /// le délai a expiré sans rien). La requête tolère le blocage (marge au-dessus du `timeout`).
     func pollEvents(queueId: String, timeout seconds: Int) async throws -> Bool {
-        var comps = URLComponents(string: "http://\(host)/api/event/pollQueue")!
-        comps.queryItems = [
+        let (data, resp) = try await send(apiPath: "event/pollQueue", query: [
             URLQueryItem(name: "queueId", value: queueId),
             URLQueryItem(name: "timeout", value: String(seconds)),
-        ]
-        var req = URLRequest(url: comps.url!)
-        req.httpMethod = "GET"
-        let (data, resp) = try await session(timeout: TimeInterval(seconds) + 5).data(for: req)
+        ]) { req in
+            req.timeoutInterval = TimeInterval(seconds) + 5   // dépasse le blocage du long-poll
+        }
         try Self.validate(resp)
         if let array = try? JSONSerialization.jsonObject(with: data) as? [Any] {
             return !array.isEmpty
@@ -408,14 +456,31 @@ struct KefClient {
 
     /// Sonde l'hôte : renvoie un `Speaker` si c'est bien une enceinte KEF gén. 2, sinon `nil`.
     ///
-    /// Le test discriminant est `speakerStatus`, un chemin **propre à KEF** : un serveur HTTP
-    /// quelconque sur le port 80 renverra autre chose (ou rien de parsable) et `getData`
-    /// lèvera, ce qui nous fait répondre `nil`. Sur un hit confirmé seulement (rare), on va
-    /// chercher le nom et la MAC.
+    /// Le test discriminant est `speakerStatus`, un chemin **propre à KEF** : un serveur HTTP(S)
+    /// quelconque renverra autre chose (ou rien de parsable) et `getData` lèvera, ce qui nous fait
+    /// répondre `nil`. Sur un hit confirmé seulement (rare), on va chercher le nom et la MAC.
     func identify() async -> Speaker? {
         guard (try? await isPoweredOn()) != nil else { return nil }
         let name = (try? await deviceName()).flatMap { $0 }
         let mac = (try? await macAddress()).flatMap { $0 }
         return Speaker(host: host, name: name ?? Speaker.defaultName, mac: mac)
+    }
+}
+
+/// Accepte le certificat **auto-signé** de l'enceinte KEF (`O=KEF, CN=KEF-device`, émis par
+/// `KEF-CA`). L'API HTTPS locale (`https://<ip>:4430`) ne présente pas de chaîne remontant à une
+/// autorité publique, et le certificat est émis pour un nom d'appareil, pas pour l'IP : la
+/// validation standard échouerait donc toujours. La connexion restant cantonnée au réseau local
+/// (même niveau de confiance que l'ancien HTTP en clair), on fait confiance au certificat serveur.
+private final class KefTLSTrustDelegate: NSObject, URLSessionDelegate {
+    func urlSession(_ session: URLSession,
+                    didReceive challenge: URLAuthenticationChallenge,
+                    completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+        guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
+              let trust = challenge.protectionSpace.serverTrust else {
+            completionHandler(.performDefaultHandling, nil)
+            return
+        }
+        completionHandler(.useCredential, URLCredential(trust: trust))
     }
 }

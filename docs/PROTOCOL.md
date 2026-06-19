@@ -10,7 +10,7 @@ dans [VERIFICATION.md](VERIFICATION.md).
 > Les niveaux de confiance par affirmation sont indiqués dans [VERIFICATION.md](VERIFICATION.md).
 
 **Sommaire**
-- [Partie A — Gén. 2 (HTTP/JSON, port 80)](#partie-a--génération-2--w2--http--json)
+- [Partie A — Gén. 2 (HTTP/JSON ; HTTPS:4430 récent, HTTP:80 historique)](#partie-a--génération-2--w2--http--json)
 - [Partie B — Gén. 1 (TCP binaire, port 50001)](#partie-b--génération-1--tcp-binaire-port-50001)
 
 ---
@@ -22,22 +22,31 @@ Identifiants/alias internes (pykefcontrol) : `LS50WII` (alias `LS50W2`), `LSXII`
 `LSXIILT` (`LSX2LT`), `LS60`, `XIO`.
 **Implémenté par KefBar** dans [`KefClient.swift`](../Sources/KefBar/KefClient.swift).
 
-## A.1 Transport HTTP — détails exacts
+## A.1 Transport — détails exacts
 
-| Propriété | Valeur |
-|---|---|
-| Schéma | `http://` (clair, **pas de TLS**) |
-| Hôte | IP LAN de l'enceinte |
-| Port | **80** (implicite) |
-| Authentification | **aucune** |
-| Base d'URL | `http://<ip>/api/` |
-| Lecture | `GET /api/getData` |
-| Écriture | `POST /api/setData` (firmwares récents) |
-| Abonnement événements | `POST /api/event/modifyQueue` |
-| Long-poll événements | `GET /api/event/pollQueue` |
+> ⚠️ **Changement de transport (firmware 2024, `p20.x`).** Les enceintes gén. 2 récentes
+> n'exposent **plus** l'API en HTTP clair sur le port 80 : celui-ci est désormais **fermé**
+> (la connexion TCP expire, y compris enceinte allumée). L'API a migré vers **HTTPS sur le
+> port 4430**, avec un **certificat auto-signé** (`O=KEF, CN=KEF-device`, émis par `KEF-CA`).
+> Vérifié sur LSX II firmware `p20.3.0.137`. Les chemins et corps JSON sont **inchangés** —
+> seuls le schéma et le port diffèrent. KefBar tape `https://<ip>:4430` en acceptant le
+> certificat ([`KefTLSTrustDelegate`](../Sources/KefBar/KefClient.swift)) et **se replie** sur
+> l'ancien `http://<ip>:80` quand le HTTPS ne se connecte pas (firmwares antérieurs).
 
-- `pykefcontrol` construit littéralement `getDataUrl = "http://" + host + "/api/getData"` et
-  `setDataUrl = "http://" + host + "/api/setData"`.
+| Propriété | Récent (firmware 2024+) | Historique |
+|---|---|---|
+| Schéma | `https://` (TLS, **certificat auto-signé** KEF) | `http://` (clair) |
+| Port | **4430** | **80** |
+| Hôte | IP LAN de l'enceinte | IP LAN de l'enceinte |
+| Authentification | **aucune** (au-delà de TLS) | **aucune** |
+| Base d'URL | `https://<ip>:4430/api/` | `http://<ip>/api/` |
+| Lecture | `GET /api/getData` | idem |
+| Écriture | `POST /api/setData` | idem |
+| Abonnement événements | `POST /api/event/modifyQueue` | idem |
+| Long-poll événements | `GET /api/event/pollQueue` | idem |
+
+- Les outils tiers historiques (`pykefcontrol` : `getDataUrl = "http://" + host + "/api/getData"`)
+  ciblent l'**ancien** transport et ne fonctionnent plus tels quels sur firmware 2024+.
 - **GET vs POST selon le firmware** : sur les modèles récents (LS50WII, LSXII, LSXIILT, LS60),
   `setData` est un **POST** avec body JSON. Sur firmwares **très anciens**, l'écriture se
   faisait en **GET** avec la valeur JSON encodée (stringifiée) dans la query string.
@@ -297,6 +306,10 @@ rafraîchissement périodique si les évènements échouent (firmware ancien, fi
 ## A.10 Exemples concrets
 
 ### curl
+
+> ⚠️ Exemples en transport **historique** (`http://$IP`). Sur **firmware 2024+** (cf. A.1),
+> remplace partout `http://$IP` par `https://$IP:4430` et ajoute `-k` (certificat auto-signé) :
+> `curl -k "https://$IP:4430/api/getData?path=player:volume&roles=value"`.
 
 ```bash
 IP=192.168.1.42

@@ -40,7 +40,7 @@ enum Discovery {
 
             // Amorce une fenêtre glissante de sondes concurrentes.
             while inFlight < maxConcurrentProbes, let host = iterator.next() {
-                group.addTask { await KefClient(host: host, timeout: probeTimeout).identify() }
+                group.addTask { await KefClient(host: host, timeout: probeTimeout, allowsLegacyFallback: false).identify() }
                 inFlight += 1
             }
 
@@ -52,7 +52,7 @@ enum Discovery {
                 if let speaker = result { found.append(speaker) }
                 // Relance une sonde dès qu'un slot se libère.
                 if let host = iterator.next() {
-                    group.addTask { await KefClient(host: host, timeout: probeTimeout).identify() }
+                    group.addTask { await KefClient(host: host, timeout: probeTimeout, allowsLegacyFallback: false).identify() }
                 }
             }
         }

@@ -76,6 +76,19 @@ struct Speaker: Identifiable, Codable, Hashable {
     /// Identifiant stable : la MAC si disponible, sinon l'IP.
     var id: String { mac ?? host }
 
+    /// MAC **normalisée** (minuscules, sans séparateurs) servant de clé de comparaison.
+    /// Indispensable car la même enceinte expose sa MAC sous deux formats selon la source :
+    /// `settings:/system/primaryMacAddress` (port-80) et `deviceid` du TXT Bonjour peuvent
+    /// différer par la casse ou les séparateurs. On compare donc toujours par cette clé.
+    var macKey: String? { Self.normalizeMac(mac) }
+
+    /// Réduit une MAC à 12 chiffres hexadécimaux minuscules, ou `nil` si la forme est invalide.
+    static func normalizeMac(_ raw: String?) -> String? {
+        guard let raw else { return nil }
+        let hex = raw.lowercased().filter(\.isHexDigit)
+        return hex.count == 12 ? hex : nil
+    }
+
     /// Libellé par défaut quand le nom de l'appareil n'est pas (encore) connu.
     static let defaultName = "Enceinte KEF"
 
