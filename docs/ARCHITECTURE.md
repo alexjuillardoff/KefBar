@@ -119,7 +119,8 @@ des callbacks (touches → actions).
 | `launchAtLogin` | `Bool` | lecture/écriture (didSet → `SMAppService`) |
 
 État privé : `client: KefClient?`, `lastSource: Source`, `previousVolume: Int = 20`,
-`eventTask`, `positionTask`, `volumeSendTask`, `coverURLShown`/`coverTask`, profil DSP brut
+`eventTask`, `positionTask`, `volumeSendTask` (+ `isSendingVolume`, garde anti-écrasement du
+volume pendant l'envoi), `coverURLShown`/`coverTask`, profil DSP brut
 (`eqType`/`eqValue`), caches par enceinte (`volumeConfigLoaded`/`eqLoaded`), `sleepTask`. Clés
 de persistance : `"kef.host"` + `"kef.speakers"` (UserDefaults). `launchAtLogin` n'est pas
 persisté dans UserDefaults : il **reflète** l'état réel du login item (`SMAppService.mainApp.status`).
@@ -212,6 +213,15 @@ Slider/Bouton ─▶ AppState.<action>()
 > Le haptique ne se déclenche qu'au changement effectif de cran : il accompagne le drag du
 > slider et les boutons −/+ / muet (qui passent tous par `setVolume`), pas les mises à jour
 > issues du rafraîchissement (qui écrivent `volume` directement).
+
+> **Anti-écrasement (miroir fidèle du volume).** Un changement local pose `isSendingVolume`
+> le temps de la fenêtre anti-rebond **et** de l'écriture réseau. Tant qu'il est levé,
+> `refresh()` **n'écrase pas** `volume` : sans ce garde, un poll d'évènement concomitant
+> (position, piste…) relirait l'ancienne valeur — l'enceinte n'ayant pas encore reçu l'écriture —
+> et le slider **retomberait en arrière**. Le drapeau retombe une fois l'écriture émise ; le
+> prochain `refresh()` (déclenché par l'évènement `player:volume` que produit notre propre
+> écriture) confirme la valeur. Un changement **externe** (télécommande / app KEF) réveille le
+> long-poll `player:volume` et se reflète alors quasi instantanément.
 
 Effet : un drag qui émet 40 valeurs/s ne déclenche **qu'une** requête HTTP, ~150 ms après
 l'arrêt du geste.

@@ -186,6 +186,11 @@ final class AppState: ObservableObject {
     private var positionTask: Task<Void, Never>?
     private var menuBarScrollTask: Task<Void, Never>?
     private var volumeSendTask: Task<Void, Never>?
+    /// `true` tant qu'un changement de volume **local** n'a pas été confirmé par l'enceinte :
+    /// couvre la fenêtre anti-rebond **et** l'écriture réseau. Pendant ce laps, `refresh()`
+    /// **n'écrase pas** `volume` — sinon un poll d'évènement concomitant relirait l'ancienne
+    /// valeur (l'enceinte n'a pas encore reçu l'écriture) et le slider retomberait en arrière.
+    private var isSendingVolume = false
     private var seekSendTask: Task<Void, Never>?
     private var coverURLShown: URL?
     private var coverTask: Task<Void, Never>?
@@ -266,8 +271,13 @@ final class AppState: ObservableObject {
 
             let trackChanged = np?.title != nowPlaying?.title
             isOn = on
-            volume = vol
-            if vol > 0 { previousVolume = vol }
+            // Ne pas écraser un changement de volume local encore en vol (anti-rebond + écriture
+            // pas encore prise en compte par l'enceinte) : l'affichage doit rester sur la valeur
+            // voulue, pas retomber sur l'ancienne lecture.
+            if !isSendingVolume {
+                volume = vol
+                if vol > 0 { previousVolume = vol }
+            }
             if src != .standby { source = src; lastSource = src }
             nowPlaying = np
             updateCover(np?.coverURL)
@@ -464,11 +474,22 @@ final class AppState: ObservableObject {
         if clamped != volume { Self.hapticTick() }
         if clamped > 0 { previousVolume = clamped }
         volume = clamped
+        // Un envoi local est désormais « en vol » : `refresh()` ne doit pas écraser `volume`
+        // avant que l'enceinte ait appliqué cette valeur.
+        isSendingVolume = true
         volumeSendTask?.cancel()
         volumeSendTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 150_000_000)
-            guard !Task.isCancelled, let self, let client = self.client else { return }
-            do { try await client.setVolume(clamped) } catch { self.report(error) }
+            // Annulée = remplacée par un envoi plus récent (drag) : c'est lui qui détient le
+            // drapeau, on ne fait rien ici.
+            if Task.isCancelled { return }
+            guard let self else { return }
+            if let client = self.client {
+                do { try await client.setVolume(clamped) } catch { self.report(error) }
+            }
+            // L'enceinte a la valeur (ou pas de client) : on rend la main aux rafraîchissements.
+            self.isSendingVolume = false
+            self.volumeSendTask = nil
         }
     }
 
